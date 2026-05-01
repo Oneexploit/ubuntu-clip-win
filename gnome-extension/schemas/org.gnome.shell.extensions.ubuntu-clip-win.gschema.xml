@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.ubuntu-clip-win" path="/org/gnome/shell/extensions/ubuntu-clip-win/">
+    <key name="show-ubuntu-clip-win" type="as">
+      <default>['&lt;Control&gt;&lt;Super&gt;v']</default>
+      <summary>Show Ubuntu Clip Win clipboard popup</summary>
+      <description>Keyboard shortcut used by the GNOME Shell extension to open the Ubuntu Clip Win popup.</description>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Clipboard History
+Comment=Start text-only clipboard history in the background
+Exec=ubuntu-clip-win --background
+Icon=ubuntu-clip-win
+Terminal=false
+X-GNOME-Autostart-enabled=true

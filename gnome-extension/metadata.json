@@ -1,0 +1,8 @@
+{
+  "uuid": "ubuntu-clip-win@amirhosein.local",
+  "name": "Ubuntu Clip Win Hotkey",
+  "description": "Binds Ctrl+Super+V to the Ubuntu Clip Win clipboard history popup.",
+  "settings-schema": "org.gnome.shell.extensions.ubuntu-clip-win",
+  "shell-version": ["45", "46", "47", "48", "49"],
+  "version": 2
+}

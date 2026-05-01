@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Clipboard History
+Comment=Text-only Windows-style clipboard history popup
+Exec=ubuntu-clip-win --show
+Icon=ubuntu-clip-win
+Terminal=false
+Categories=Utility;Qt;
+StartupNotify=false

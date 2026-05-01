@@ -1,0 +1,6 @@
+build/
+build-deb/
+*.deb
+*.sqlite
+*.user
+.DS_Store
