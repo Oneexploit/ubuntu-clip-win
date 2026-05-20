@@ -2,62 +2,36 @@
 
 # Clipboard for Linux
 
-A modern, lightweight, Windows-inspired clipboard history popup for Ubuntu/Linux.
+A Windows-inspired clipboard history popup for Ubuntu/Linux, built with C++ and Qt 6.
 
-This project brings a familiar clipboard history experience to Ubuntu: press **Ctrl + Super + V**, browse your copied text history, select an item with the keyboard or mouse, and paste it quickly.
-
-The app is designed to be simple, fast, and user-friendly. It focuses on **text-only clipboard history** to avoid heavy memory usage and privacy issues caused by storing files or images.
-
----
+Press `Ctrl + Super + V`, browse recent clipboard items, restore one with the keyboard or mouse, and keep important items pinned at the top.
 
 ## Features
 
-- Modern clipboard history popup for Ubuntu/Linux
-- Opens with **Ctrl + Super + V**
-- Text-only history: text, code snippets, tokens, terminal output, logs, commands, URLs, and plain text
-- Keyboard-friendly navigation
-  - `Up` / `Down` to move between items
-  - `Enter` to paste the selected item
-  - `Delete` to remove an item
-  - `Ctrl + Delete` to clear history
-- Newest copied items appear at the top
-- Older items stay lower in the list
-- Draggable popup window
-- Search support
-- Lightweight background process
-- Session-only history
-  - Clipboard history is automatically cleared after logout, shutdown, or reboot
-- Does not store files, images, PNGs, SVG files, or binary clipboard data
-- Tray icon support
-- GNOME Shell Extension for the global shortcut
-- Built with C++ and Qt 6
-
----
-
-## What This App Stores
-
-This clipboard manager stores only text-based clipboard content, such as:
-
-- Plain text
-- Source code
-- Terminal output
-- Commands
-- Logs
-- Tokens copied as text
-- URLs copied as text
-- SVG/XML content copied from an editor as text
-
-It does **not** store:
-
-- Copied files
-- Copied folders
-- Images
-- PNG/JPG/SVG files copied from the file manager
-- Binary clipboard data
-
-This keeps the app lightweight and prevents the clipboard database from becoming too large.
-
----
+- Windows-style popup with search, keyboard navigation, mouse support, tray menu, and draggable position
+- Multi-format clipboard history
+  - Plain text
+  - Code snippets and terminal output
+  - Rich text / HTML
+  - Images
+  - File copies when the desktop exposes them through clipboard formats
+- Real pinned items
+  - Pinned items stay at the top
+  - Pinned items survive restarts
+  - Clear history only removes unpinned items
+- Configurable history behavior
+  - Session-only history by default
+  - Optional persistent unpinned history
+  - Configurable history limit
+  - Clear-confirmation toggle
+- Environment-aware behavior
+  - On X11 with `xdotool`, `Enter` restores and pastes directly
+  - On Wayland, `Enter` restores the clipboard item and tells you to paste with `Ctrl+V`
+- Settings dialog for
+  - Persistence
+  - History size
+  - Autostart
+  - GNOME shortcut editing when the extension schema is available
 
 ## Shortcut
 
@@ -67,21 +41,51 @@ Default shortcut:
 Ctrl + Super + V
 ```
 
-On most Linux keyboards, the **Super** key is the same as the **Windows** key.
+On most Linux keyboards, `Super` is the Windows key.
 
-So the shortcut is:
+## Install
 
-```text
-Ctrl + Win + V
+```bash
+git clone https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git
+cd YOUR_REPOSITORY
+bash install.sh
 ```
 
----
+`install.sh` does the rest:
+
+- Installs Ubuntu dependencies automatically when `apt` is available
+- Builds the app in release mode
+- Installs the binary, desktop entry, and icons under `/usr/local`
+- Creates the user autostart entry
+- Tries to install the GNOME shortcut extension
+- Starts the app in the background
+
+Useful options:
+
+```bash
+bash install.sh --skip-deps
+bash install.sh --no-start
+bash install.sh --prefix /opt/ubuntu-clip-win
+```
+
+## Uninstall
+
+```bash
+bash uninstall.sh
+```
+
+By default, uninstall removes the installed files, autostart entry, GNOME extension, user settings, and clipboard database.
+
+Useful options:
+
+```bash
+bash uninstall.sh --keep-data
+bash uninstall.sh --prefix /opt/ubuntu-clip-win
+```
 
 ## Requirements
 
-Ubuntu with Qt 6 development packages installed.
-
-Install dependencies:
+If you prefer manual dependency installation instead of automatic install:
 
 ```bash
 sudo apt update
@@ -96,104 +100,57 @@ sudo apt install -y \
   gnome-shell-extension-prefs
 ```
 
----
-
-## Install
-
-Clone the repository:
-
-```bash
-git clone https://github.com/YOUR_USERNAME/YOUR_REPOSITORY.git
-cd YOUR_REPOSITORY
-```
-
-Build and install:
-
-```bash
-./packaging/install-user.sh
-```
-
-The installer will:
-
-- Build the app with CMake
-- Install the binary to `/usr/local/bin/ubuntu-clip-win`
-- Install the desktop entry
-- Install the app icon
-- Install the autostart entry
-- Install the GNOME Shell Extension shortcut
-- Start the app in the background
-
----
+`xdotool` is optional on Wayland, but it is required for one-key paste on X11.
 
 ## Run
 
-Show the clipboard popup:
-
 ```bash
 ubuntu-clip-win --show
-```
-
-Run in the background:
-
-```bash
 ubuntu-clip-win --background
+ubuntu-clip-win --settings
 ```
 
-Quit the app:
+## Usage
 
-```bash
-pkill ubuntu-clip-win
-```
+1. Copy text, code, rich text, an image, or a supported file selection.
+2. Press `Ctrl + Super + V`.
+3. Use `Up` / `Down` to choose an item.
+4. Press `Enter`.
 
----
+Behavior depends on the session:
 
-## GNOME Shortcut Setup
+- X11 with `xdotool`: the item is restored and pasted automatically.
+- Wayland or X11 without `xdotool`: the item is restored to the clipboard, then you paste it in the target app with `Ctrl+V`.
 
-The installer tries to install the GNOME Shell Extension automatically.
+Useful shortcuts inside the popup:
 
-Manual installation:
+- `Ctrl+F`: focus search
+- `Ctrl+C`: copy the selected history item without auto-paste
+- `Ctrl+P`: pin or unpin the selected item
+- `Delete`: delete the selected item
+- `Ctrl+Delete`: clear unpinned history
+- `Ctrl+,`: open settings
+
+## Storage Model
+
+- Unpinned history is session-only by default
+- You can enable persistent unpinned history in Settings
+- Pinned items are always preserved across restarts
+- History size is configurable in Settings
+
+Clipboard data is stored locally in the app data directory so pinned items and optional persistent history can survive restarts.
+
+## GNOME Shortcut
+
+The repository includes a GNOME Shell extension that binds `Ctrl + Super + V`.
+
+Manual install:
 
 ```bash
 ./gnome-extension/install.sh
 ```
 
 If the shortcut does not work immediately on Wayland, log out and log back in.
-
-Default shortcut:
-
-```text
-Ctrl + Super + V
-```
-
----
-
-## Usage
-
-1. Copy any text, code, terminal output, command, or token.
-2. Press **Ctrl + Super + V**.
-3. Use `Up` / `Down` to select an item.
-4. Press `Enter` to paste it.
-
-You can also click an item with the mouse.
-
----
-
-## Memory and Privacy Design
-
-This project intentionally uses a **session-only** clipboard history.
-
-That means the history is cleared automatically when the session ends, such as after:
-
-- Logout
-- Reboot
-- Shutdown
-- App restart
-
-This keeps sensitive copied content from staying on disk permanently.
-
-The app also avoids storing files and images, which helps keep memory usage predictable and prevents accidental storage of large clipboard items.
-
----
 
 ## Build from Source
 
@@ -203,90 +160,31 @@ cmake --build build -j"$(nproc)"
 sudo cmake --install build
 ```
 
-Then run:
+## Notes About Wayland and X11
 
-```bash
-ubuntu-clip-win --show
-```
-
----
+- GNOME/Wayland uses the extension for the global shortcut
+- X11 can use `xdotool` for automatic paste
+- Wayland usually blocks simulated key injection for security reasons, so the app falls back to "restore clipboard, then paste manually"
 
 ## Project Structure
 
 ```text
 .
-├── assets/                 # App icons and Qt resources
-├── gnome-extension/        # GNOME Shell Extension for Ctrl + Super + V
-├── packaging/              # Install, uninstall, and packaging scripts
-├── src/                    # C++ / Qt source code
-├── CMakeLists.txt
-└── README.md
+|-- assets/
+|-- gnome-extension/
+|-- packaging/
+|-- src/
+|-- CMakeLists.txt
+`-- README.md
 ```
-
----
-
-## Tech Stack
-
-- C++17
-- Qt 6
-- Qt Widgets
-- SQLite in-memory/session storage
-- CMake
-- GNOME Shell Extension
-- xdotool for X11 paste integration
-
----
-
-## Notes About Wayland and X11
-
-Linux desktop environments handle global shortcuts and paste automation differently.
-
-- On GNOME/Wayland, the GNOME Shell Extension is used for the global shortcut.
-- On X11, paste automation can be handled more directly with `xdotool`.
-- On Wayland, some apps or desktop environments may restrict simulated keyboard input for security reasons.
-
-The selected text is always placed into the system clipboard before paste is attempted.
-
----
-
-## Uninstall
-
-```bash
-./packaging/uninstall-user.sh
-```
-
-Or manually:
-
-```bash
-pkill ubuntu-clip-win || true
-sudo rm -f /usr/local/bin/ubuntu-clip-win
-sudo rm -f /usr/local/share/applications/ubuntu-clip-win.desktop
-sudo rm -f /etc/xdg/autostart/ubuntu-clip-win-autostart.desktop
-rm -rf ~/.local/share/gnome-shell/extensions/ubuntu-clip-win@amirhosein.local
-```
-
----
 
 ## Roadmap
 
-Planned improvements:
-
-- Better Wayland paste integration where supported
-- More polished animations
-- Settings page
-- Custom shortcut configuration
-- Optional persistent history mode
-- Import/export settings
-- More desktop environment support
-
----
+- Better shortcut support outside GNOME
+- Broader desktop-environment integration
+- More preview polish for large images and file groups
+- Import/export of settings
 
 ## License
 
-This project is released under the MIT License.
-
----
-
-## Author
-
-Built by AmirHosein.
+MIT

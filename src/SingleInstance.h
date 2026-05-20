@@ -18,6 +18,7 @@ public:
 signals:
     void showRequested();
     void showRequestedForWindow(const QString &targetWindowId);
+    void settingsRequested();
     void messageReceived(const QString &message);
 
 private slots:

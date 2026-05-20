@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QSqlDatabase>
 #include <QSqlQuery>
+
 #include <optional>
 
 class ClipboardStore : public QObject {
@@ -23,6 +24,7 @@ public:
     QList<ClipItem> recentItems(const QString &search = QString(), int limit = 80) const;
     std::optional<ClipItem> itemById(int id) const;
     bool copyToClipboard(const ClipItem &item);
+    void reloadSettings();
 
 public slots:
     void scheduleCaptureFromClipboard();
@@ -40,12 +42,15 @@ signals:
 
 private:
     bool ensureSchema();
-    QString hashFor(const QString &text) const;
+    bool migrateLegacySchemaIfNeeded();
+    QString databasePath() const;
+    QString hashFor(const ClipItem &item) const;
     bool captureMimeData(const QMimeData *mime, QClipboard::Mode mode);
-    void enforceLimit(int maxItems = 120);
+    void enforceLimit();
     ClipItem readItemFromQuery(const QSqlQuery &query) const;
     QString nowIso() const;
-    void touchExistingOrInsert(const QString &text, const QString &hash);
+    void applyStartupRetentionPolicy();
+    void touchExistingOrInsert(const ClipItem &item);
 
     QSqlDatabase db_;
     QString connectionName_;

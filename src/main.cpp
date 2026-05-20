@@ -1,7 +1,9 @@
-
+#include "AppIntegration.h"
+#include "AppSettings.h"
 #include "ClipboardStore.h"
 #include "PasteController.h"
 #include "PopupWindow.h"
+#include "SettingsDialog.h"
 #include "SingleInstance.h"
 
 #include <QAction>
@@ -70,11 +72,15 @@ int main(int argc, char *argv[]) {
     const QStringList args = app.arguments();
     const bool showOnStart = args.contains(QStringLiteral("--show")) || args.contains(QStringLiteral("-s"));
     const bool backgroundOnly = args.contains(QStringLiteral("--background"));
+    const bool openSettingsOnStart = args.contains(QStringLiteral("--settings"));
 
+    if (openSettingsOnStart && SingleInstance::sendMessage(QStringLiteral("settings"))) {
+        return 0;
+    }
     if (showOnStart && SingleInstance::sendMessage(showMessageWithTargetWindow())) {
         return 0;
     }
-    if (!showOnStart && !backgroundOnly && SingleInstance::sendMessage(showMessageWithTargetWindow())) {
+    if (!showOnStart && !backgroundOnly && !openSettingsOnStart && SingleInstance::sendMessage(showMessageWithTargetWindow())) {
         return 0;
     }
 
@@ -91,10 +97,57 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    QSystemTrayIcon *tray = nullptr;
+    QMenu *menu = nullptr;
+
+    auto notify = [&](const QString &title, const QString &message, bool warning) {
+        if (message.trimmed().isEmpty()) {
+            return;
+        }
+
+        if (tray && tray->isVisible()) {
+            tray->showMessage(title,
+                              message,
+                              warning ? QSystemTrayIcon::Warning : QSystemTrayIcon::Information,
+                              5000);
+            return;
+        }
+
+        if (!backgroundOnly) {
+            if (warning) {
+                QMessageBox::warning(nullptr, title, message);
+            } else {
+                QMessageBox::information(nullptr, title, message);
+            }
+        }
+    };
+
     std::unique_ptr<PopupWindow> popup;
+    auto openSettings = [&]() {
+        SettingsDialog dialog(popup ? popup.get() : nullptr);
+        QObject::connect(&dialog, &SettingsDialog::settingsApplied, &app, [&]() {
+            store.reloadSettings();
+            if (popup) {
+                popup->refreshItems();
+            }
+        });
+        dialog.exec();
+        store.reloadSettings();
+        if (popup) {
+            popup->refreshItems();
+        }
+    };
+
     auto ensurePopup = [&]() -> PopupWindow * {
         if (!popup) {
             popup = std::make_unique<PopupWindow>(&store);
+            QObject::connect(popup.get(), &PopupWindow::settingsRequested, &app, openSettings);
+            QObject::connect(popup.get(),
+                             &PopupWindow::notificationRequested,
+                             &app,
+                             [&](const QString &title, const QString &message, bool warning) {
+                                 notify(title, message, warning);
+                             });
         }
         return popup.get();
     };
@@ -105,61 +158,75 @@ int main(int argc, char *argv[]) {
     QObject::connect(&singleInstance, &SingleInstance::showRequestedForWindow, &app, [&](const QString &targetWindowId) {
         ensurePopup()->showPopupForWindow(targetWindowId);
     });
+    QObject::connect(&singleInstance, &SingleInstance::settingsRequested, &app, [&]() {
+        ensurePopup()->showPopup();
+        openSettings();
+    });
 
     QClipboard *systemClipboard = QApplication::clipboard();
     if (systemClipboard) {
-        QObject::connect(systemClipboard, &QClipboard::dataChanged, &store, &ClipboardStore::captureFromClipboard);
-        QObject::connect(systemClipboard, &QClipboard::dataChanged, &store, &ClipboardStore::scheduleCaptureFromClipboard);
         QObject::connect(systemClipboard, &QClipboard::changed, &store, [&store](QClipboard::Mode mode) {
             if (mode == QClipboard::Clipboard) {
-                store.captureFromClipboard();
                 store.scheduleCaptureFromClipboard();
             }
         });
     }
 
-    QSystemTrayIcon *tray = nullptr;
-    QMenu *menu = nullptr;
+    QObject::connect(&store, &ClipboardStore::errorOccurred, &app, [&](const QString &message) {
+        notify(QStringLiteral("Clipboard History"), message, true);
+    });
+
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
         tray = new QSystemTrayIcon(appIcon(), &app);
+        tray->setToolTip(QStringLiteral("Clipboard History"));
+
         menu = new QMenu();
         QObject::connect(&app, &QCoreApplication::aboutToQuit, menu, &QObject::deleteLater);
 
         QAction *showAction = menu->addAction(QStringLiteral("Show clipboard history"));
-        QAction *clearAction = menu->addAction(QStringLiteral("Clear history"));
+        QAction *settingsAction = menu->addAction(QStringLiteral("Settings"));
+        QAction *clearAction = menu->addAction(QStringLiteral("Clear unpinned history"));
         menu->addSeparator();
         QAction *quitAction = menu->addAction(QStringLiteral("Quit"));
 
         QObject::connect(showAction, &QAction::triggered, &app, [&]() {
             ensurePopup()->showPopup();
         });
-        QObject::connect(clearAction, &QAction::triggered, &store, &ClipboardStore::clearUnpinned);
+        QObject::connect(settingsAction, &QAction::triggered, &app, openSettings);
+        QObject::connect(clearAction, &QAction::triggered, &app, [&]() {
+            ensurePopup()->clearHistoryWithConfirmation();
+        });
         QObject::connect(quitAction, &QAction::triggered, &app, &QApplication::quit);
         QObject::connect(tray, &QSystemTrayIcon::activated, &app, [&](QSystemTrayIcon::ActivationReason reason) {
             if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) {
                 ensurePopup()->showPopup();
             }
         });
-        QObject::connect(&store, &ClipboardStore::errorOccurred, tray, [tray](const QString &message) {
-            if (tray && tray->isVisible()) {
-                tray->showMessage(QStringLiteral("Clipboard History"), message, QSystemTrayIcon::Warning, 4000);
-            }
-        });
 
-        tray->setToolTip(QStringLiteral("Clipboard History"));
         tray->setContextMenu(menu);
         tray->show();
     }
 
-    QTimer clipboardPoller;
-    clipboardPoller.setInterval(80);
-    QObject::connect(&clipboardPoller, &QTimer::timeout, &store, &ClipboardStore::captureFromClipboard);
-    clipboardPoller.start();
-
     QTimer::singleShot(200, &store, &ClipboardStore::scheduleCaptureFromClipboard);
-    if (showOnStart || !backgroundOnly) {
+
+    if (AppSettings::showStartupDiagnostics() && !AppSettings::startupDiagnosticsShown()) {
+        const QStringList diagnostics = AppIntegration::diagnosticsMessages();
+        if (!diagnostics.isEmpty()) {
+            QTimer::singleShot(900, &app, [&, diagnostics]() {
+                notify(QStringLiteral("Clipboard History"),
+                       diagnostics.join(QStringLiteral("\n\n")),
+                       !PasteController::canAutoPaste());
+                AppSettings::setStartupDiagnosticsShown(true);
+            });
+        }
+    }
+
+    if (showOnStart || openSettingsOnStart || !backgroundOnly) {
         QTimer::singleShot(0, &app, [&]() {
             ensurePopup()->showPopup();
+            if (openSettingsOnStart) {
+                openSettings();
+            }
         });
     }
 

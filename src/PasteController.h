@@ -4,13 +4,13 @@
 
 class PasteController {
 public:
-    // X11 helper. Wayland deliberately returns empty/false because normal client
-    // applications cannot safely inject keyboard input into other applications.
     static QString activeWindowId();
+    static bool canAutoPaste();
+    static bool isX11Session();
+    static bool isWaylandSession();
     static bool tryPasteToWindow(const QString &windowId);
     static bool tryPasteToActiveApplication();
 
 private:
     static QString xdotoolPath();
-    static bool isX11();
 };

@@ -29,20 +29,26 @@ QString PasteController::xdotoolPath() {
     return QStandardPaths::findExecutable(QStringLiteral("xdotool"));
 }
 
-bool PasteController::isX11() {
+bool PasteController::isX11Session() {
     const QString sessionType = QString::fromLocal8Bit(qgetenv("XDG_SESSION_TYPE")).toLower();
     return sessionType == QStringLiteral("x11");
 }
 
+bool PasteController::isWaylandSession() {
+    const QString sessionType = QString::fromLocal8Bit(qgetenv("XDG_SESSION_TYPE")).toLower();
+    return sessionType == QStringLiteral("wayland");
+}
+
+bool PasteController::canAutoPaste() {
+    return isX11Session() && !xdotoolPath().isEmpty();
+}
+
 QString PasteController::activeWindowId() {
-    if (!isX11()) {
-        return {};
-    }
-    const QString xdotool = xdotoolPath();
-    if (xdotool.isEmpty()) {
+    if (!canAutoPaste()) {
         return {};
     }
 
+    const QString xdotool = xdotoolPath();
     QProcess process;
     process.start(xdotool, {QStringLiteral("getactivewindow")});
     if (!process.waitForFinished(300)) {
@@ -55,11 +61,7 @@ QString PasteController::activeWindowId() {
 }
 
 bool PasteController::tryPasteToWindow(const QString &windowId) {
-    if (!isX11()) {
-        return false;
-    }
-    const QString xdotool = xdotoolPath();
-    if (xdotool.isEmpty()) {
+    if (!canAutoPaste()) {
         return false;
     }
 
@@ -91,12 +93,7 @@ bool PasteController::tryPasteToWindow(const QString &windowId) {
 }
 
 bool PasteController::tryPasteToActiveApplication() {
-    if (!isX11()) {
-        return false;
-    }
-
-    const QString xdotool = xdotoolPath();
-    if (xdotool.isEmpty()) {
+    if (!canAutoPaste()) {
         return false;
     }
 

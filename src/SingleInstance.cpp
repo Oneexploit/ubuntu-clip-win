@@ -48,6 +48,8 @@ void SingleInstance::handleNewConnection() {
                 emit messageReceived(message);
                 if (message == QStringLiteral("show")) {
                     emit showRequested();
+                } else if (message == QStringLiteral("settings")) {
+                    emit settingsRequested();
                 } else if (message.startsWith(QStringLiteral("show|"))) {
                     emit showRequestedForWindow(message.mid(5).trimmed());
                 }

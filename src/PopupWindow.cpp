@@ -1,4 +1,7 @@
 #include "PopupWindow.h"
+
+#include "AppIntegration.h"
+#include "AppSettings.h"
 #include "PasteController.h"
 
 #include <QAbstractAnimation>
@@ -8,10 +11,8 @@
 #include <QBoxLayout>
 #include <QColor>
 #include <QCursor>
-#include <QDateTime>
 #include <QEvent>
 #include <QFrame>
-#include <QGraphicsDropShadowEffect>
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QLabel>
@@ -21,7 +22,6 @@
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPropertyAnimation>
-#include <QPushButton>
 #include <QScreen>
 #include <QScrollBar>
 #include <QSettings>
@@ -30,14 +30,27 @@
 #include <QWindow>
 
 namespace {
-constexpr int kPopupWidth = 456;
-constexpr int kPopupHeight = 610;
+constexpr int kPopupWidth = 500;
+constexpr int kPopupHeight = 620;
 constexpr int kBottomMargin = 26;
 constexpr int kSideMargin = 18;
 constexpr int kPasteDelayMs = 180;
 
 QString pluralizedItems(int count) {
     return count == 1 ? QStringLiteral("1 item") : QStringLiteral("%1 items").arg(count);
+}
+
+QString iconLabelForItem(const ClipItem &item) {
+    if (item.hasImage()) {
+        return QStringLiteral("IMG");
+    }
+    if (item.hasFiles()) {
+        return QStringLiteral("FILE");
+    }
+    if (item.hasHtml()) {
+        return QStringLiteral("HTML");
+    }
+    return QStringLiteral("TXT");
 }
 
 bool isPlainLeftClick(const QMouseEvent *event) {
@@ -77,6 +90,7 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
     auto *logo = new QLabel(panel_);
     logo->setObjectName(QStringLiteral("appLogo"));
     logo->setFixedSize(36, 36);
+    logo->setAlignment(Qt::AlignCenter);
     logo->setScaledContents(true);
     logo->setPixmap(QPixmap(QStringLiteral(":/icons/ubuntu-clip-win.png")).scaled(36, 36, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     logo->setCursor(Qt::OpenHandCursor);
@@ -88,6 +102,7 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
     title->setObjectName(QStringLiteral("title"));
     title->setCursor(Qt::OpenHandCursor);
     title->installEventFilter(this);
+
     statusLabel_ = new QLabel(QStringLiteral("Ready"), panel_);
     statusLabel_->setObjectName(QStringLiteral("subtitle"));
     statusLabel_->setCursor(Qt::OpenHandCursor);
@@ -95,13 +110,13 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
     titleBlock->addWidget(title);
     titleBlock->addWidget(statusLabel_);
 
-    auto *shortcutHint = new QLabel(QStringLiteral("Ctrl + Super + V"), panel_);
-    shortcutHint->setObjectName(QStringLiteral("keyCap"));
-    shortcutHint->setAlignment(Qt::AlignCenter);
-    shortcutHint->setCursor(Qt::OpenHandCursor);
-    shortcutHint->installEventFilter(this);
+    shortcutHint_ = new QLabel(panel_);
+    shortcutHint_->setObjectName(QStringLiteral("keyCap"));
+    shortcutHint_->setAlignment(Qt::AlignCenter);
+    shortcutHint_->setCursor(Qt::OpenHandCursor);
+    shortcutHint_->installEventFilter(this);
 
-    auto *closeButton = new QPushButton(QStringLiteral("×"), panel_);
+    auto *closeButton = new QPushButton(QStringLiteral("x"), panel_);
     closeButton->setObjectName(QStringLiteral("closeButton"));
     closeButton->setFixedSize(30, 30);
     closeButton->setToolTip(QStringLiteral("Close"));
@@ -109,13 +124,13 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
 
     header->addWidget(logo);
     header->addLayout(titleBlock, 1);
-    header->addWidget(shortcutHint);
+    header->addWidget(shortcutHint_);
     header->addWidget(closeButton);
     layout->addLayout(header);
 
     search_ = new QLineEdit(panel_);
     search_->setObjectName(QStringLiteral("searchBox"));
-    search_->setPlaceholderText(QStringLiteral("Search text history"));
+    search_->setPlaceholderText(QStringLiteral("Search clipboard history"));
     search_->setClearButtonEnabled(true);
     search_->setMinimumHeight(38);
     search_->installEventFilter(this);
@@ -147,17 +162,25 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
 
     auto *footer = new QHBoxLayout();
     footer->setSpacing(8);
+
+    settingsButton_ = new QPushButton(QStringLiteral("Settings"), panel_);
+    settingsButton_->setObjectName(QStringLiteral("footerButton"));
+    settingsButton_->setCursor(Qt::PointingHandCursor);
+
     clearButton_ = new QPushButton(QStringLiteral("Clear"), panel_);
     clearButton_->setObjectName(QStringLiteral("footerButton"));
-    clearButton_->setToolTip(QStringLiteral("Clear text history for this session"));
+    clearButton_->setToolTip(QStringLiteral("Clear unpinned history"));
     clearButton_->setCursor(Qt::PointingHandCursor);
-    auto *pasteHint = new QLabel(QStringLiteral("↑↓ select  •  Enter paste  •  drag header to move"), panel_);
-    pasteHint->setObjectName(QStringLiteral("footerHint"));
-    pasteHint->setCursor(Qt::OpenHandCursor);
-    pasteHint->installEventFilter(this);
+
+    footerHint_ = new QLabel(panel_);
+    footerHint_->setObjectName(QStringLiteral("footerHint"));
+    footerHint_->setCursor(Qt::OpenHandCursor);
+    footerHint_->installEventFilter(this);
+
+    footer->addWidget(settingsButton_);
     footer->addWidget(clearButton_);
     footer->addStretch();
-    footer->addWidget(pasteHint);
+    footer->addWidget(footerHint_);
     layout->addLayout(footer);
 
     setStyleSheet(QStringLiteral(R"CSS(
@@ -195,7 +218,8 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
             color: rgba(255, 255, 255, 210);
             border: none;
             border-radius: 8px;
-            font-size: 19px;
+            font-size: 16px;
+            font-weight: 700;
         }
         #closeButton:hover {
             background-color: rgba(255, 255, 255, 30);
@@ -273,8 +297,8 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
             border: 1px solid rgba(255, 255, 255, 20);
             border-radius: 9px;
             color: rgba(255, 255, 255, 205);
-            font-size: 20px;
-            font-weight: 650;
+            font-size: 12px;
+            font-weight: 700;
         }
         QLabel#pinTag {
             background-color: rgba(255, 255, 255, 24);
@@ -289,7 +313,8 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
             color: rgba(255, 255, 255, 205);
             border: none;
             border-radius: 8px;
-            font-size: 16px;
+            font-size: 12px;
+            font-weight: 700;
         }
         QPushButton#pinButton:hover, QPushButton#deleteButton:hover {
             background-color: rgba(255, 255, 255, 32);
@@ -335,6 +360,7 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
     )CSS"));
 
     connect(closeButton, &QPushButton::clicked, this, &QWidget::hide);
+    connect(settingsButton_, &QPushButton::clicked, this, &PopupWindow::settingsRequested);
     connect(clearButton_, &QPushButton::clicked, this, &PopupWindow::clearHistoryWithConfirmation);
     connect(search_, &QLineEdit::textChanged, this, &PopupWindow::refreshItems);
     connect(list_, &QListWidget::itemActivated, this, &PopupWindow::activateListItem);
@@ -344,6 +370,8 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
         updateStatusForSelection();
     });
     connect(store_, &ClipboardStore::changed, this, &PopupWindow::refreshItems);
+
+    updateChromeText();
 }
 
 void PopupWindow::showPopupForWindow(const QString &targetWindowId) {
@@ -366,6 +394,7 @@ void PopupWindow::showPopup() {
     if (search_) {
         search_->clear();
     }
+    updateChromeText();
     refreshItems();
 
     const QPoint target = hasUserPosition_ ? clampedPopupPosition(userPosition_) : defaultPopupPosition();
@@ -439,7 +468,7 @@ void PopupWindow::refreshItems() {
         : -1;
     const QString query = search_ ? search_->text() : QString();
     const bool searchIsActive = !query.trimmed().isEmpty();
-    const auto items = store_->recentItems(query, 80);
+    const auto items = store_->recentItems(query, qMax(80, AppSettings::historyLimit()));
     const bool hasAnyItems = !store_->recentItems(QString(), 1).isEmpty();
 
     list_->clear();
@@ -458,7 +487,7 @@ void PopupWindow::refreshItems() {
     for (const ClipItem &item : items) {
         auto *row = new QListWidgetItem();
         row->setData(Qt::UserRole, item.id);
-        row->setSizeHint(QSize(list_->viewport()->width() - 8, 82));
+        row->setSizeHint(QSize(qMax(320, list_->viewport()->width() - 8), item.hasImage() ? 96 : 84));
         row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         list_->addItem(row);
         list_->setItemWidget(row, createItemWidget(item));
@@ -492,10 +521,17 @@ QWidget *PopupWindow::createItemWidget(const ClipItem &item) {
     auto *visual = new QLabel(card);
     visual->setObjectName(QStringLiteral("clipIcon"));
     visual->setAlignment(Qt::AlignCenter);
-    visual->setFixedSize(48, 48);
+    visual->setFixedSize(item.hasImage() ? QSize(56, 56) : QSize(48, 48));
     visual->setAttribute(Qt::WA_TransparentForMouseEvents);
 
-    visual->setText(QStringLiteral("T"));
+    if (item.hasImage()) {
+        QPixmap preview;
+        preview.loadFromData(item.imagePng, "PNG");
+        visual->setPixmap(preview.scaled(56, 56, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+        visual->setScaledContents(true);
+    } else {
+        visual->setText(iconLabelForItem(item));
+    }
     layout->addWidget(visual);
 
     auto *textLayout = new QVBoxLayout();
@@ -503,7 +539,7 @@ QWidget *PopupWindow::createItemWidget(const ClipItem &item) {
 
     auto *topLine = new QHBoxLayout();
     topLine->setSpacing(6);
-    auto *meta = new QLabel(typeTitle(item) + QStringLiteral("  •  ") + relativeTime(item.updatedAt), card);
+    auto *meta = new QLabel(typeTitle(item) + QStringLiteral(" | ") + relativeTime(item.updatedAt), card);
     meta->setObjectName(QStringLiteral("clipType"));
     meta->setAttribute(Qt::WA_TransparentForMouseEvents);
     topLine->addWidget(meta, 1);
@@ -518,23 +554,26 @@ QWidget *PopupWindow::createItemWidget(const ClipItem &item) {
     auto *preview = new QLabel(item.previewText(), card);
     preview->setObjectName(QStringLiteral("clipPreview"));
     preview->setWordWrap(true);
-    preview->setMaximumHeight(39);
+    preview->setMaximumHeight(item.hasImage() ? 54 : 42);
     preview->setAttribute(Qt::WA_TransparentForMouseEvents);
     textLayout->addWidget(preview);
     layout->addLayout(textLayout, 1);
 
     auto *buttons = new QVBoxLayout();
     buttons->setSpacing(3);
-    auto *pin = new QPushButton(item.pinned ? QStringLiteral("★") : QStringLiteral("☆"), card);
+
+    auto *pin = new QPushButton(item.pinned ? QStringLiteral("UNPIN") : QStringLiteral("PIN"), card);
     pin->setObjectName(QStringLiteral("pinButton"));
-    pin->setFixedSize(30, 27);
+    pin->setFixedSize(52, 26);
     pin->setToolTip(item.pinned ? QStringLiteral("Unpin") : QStringLiteral("Pin"));
     pin->setCursor(Qt::PointingHandCursor);
-    auto *remove = new QPushButton(QStringLiteral("×"), card);
+
+    auto *remove = new QPushButton(QStringLiteral("DEL"), card);
     remove->setObjectName(QStringLiteral("deleteButton"));
-    remove->setFixedSize(30, 27);
+    remove->setFixedSize(52, 26);
     remove->setToolTip(QStringLiteral("Delete"));
     remove->setCursor(Qt::PointingHandCursor);
+
     buttons->addWidget(pin);
     buttons->addWidget(remove);
     buttons->addStretch();
@@ -555,11 +594,7 @@ QWidget *PopupWindow::createItemWidget(const ClipItem &item) {
 }
 
 QString PopupWindow::typeTitle(const ClipItem &item) const {
-    const QString title = QStringLiteral("Text");
-    if (item.pinned) {
-        return QStringLiteral("Pinned • %1").arg(title);
-    }
-    return title;
+    return item.typeLabel();
 }
 
 QString PopupWindow::relativeTime(const QDateTime &utcDate) const {
@@ -587,15 +622,14 @@ QString PopupWindow::relativeTime(const QDateTime &utcDate) const {
 QString PopupWindow::emptyStateText(bool searchIsActive) const {
     if (searchIsActive) {
         return QStringLiteral(
-            "<div style='font-size:32px; margin-bottom:10px;'>⌕</div>"
             "<div style='font-size:15px; color:#ffffff;'>No results found</div>"
             "<div style='margin-top:6px;'>Try a different word or clear the search box.</div>");
     }
 
     return QStringLiteral(
-        "<div style='font-size:34px; margin-bottom:10px;'>▣</div>"
         "<div style='font-size:15px; color:#ffffff;'>Your clipboard history is empty</div>"
-        "<div style='margin-top:6px;'>Copy any text, code, token, or terminal output. Then press <b>Ctrl + Super + V</b>.</div>");
+        "<div style='margin-top:6px;'>Copy text, code, rich text, images, or files. Then press <b>%1</b>.</div>")
+        .arg(AppIntegration::configuredShortcutDisplay());
 }
 
 void PopupWindow::activateListItem(QListWidgetItem *item) {
@@ -619,15 +653,31 @@ void PopupWindow::activateById(int id) {
         return;
     }
 
+    if (!store_->copyToClipboard(*item)) {
+        return;
+    }
+
+    if (!PasteController::canAutoPaste()) {
+        hide();
+        emit notificationRequested(QStringLiteral("Clipboard History"),
+                                   QStringLiteral("Copied selected item. Press Ctrl+V in the target app."),
+                                   false);
+        return;
+    }
+
     pasteInProgress_ = true;
-    statusLabel_->setText(QStringLiteral("Pasting…"));
-    store_->setToClipboard(*item);
+    statusLabel_->setText(QStringLiteral("Pasting..."));
     hide();
 
     const QString targetWindowId = previousActiveWindowId_;
     QTimer::singleShot(kPasteDelayMs, this, [this, targetWindowId]() {
-        PasteController::tryPasteToWindow(targetWindowId);
+        const bool pasted = PasteController::tryPasteToWindow(targetWindowId);
         pasteInProgress_ = false;
+        if (!pasted) {
+            emit notificationRequested(QStringLiteral("Clipboard History"),
+                                       QStringLiteral("The item was copied, but auto-paste was unavailable. Press Ctrl+V in the target app."),
+                                       true);
+        }
     });
 }
 
@@ -653,8 +703,9 @@ void PopupWindow::setSelectedItemToClipboardOnly() {
         return;
     }
 
-    store_->setToClipboard(*item);
-    statusLabel_->setText(QStringLiteral("Copied selected item. Press Ctrl+V to paste."));
+    if (store_->copyToClipboard(*item)) {
+        statusLabel_->setText(QStringLiteral("Copied selected item. Paste it with Ctrl+V."));
+    }
 }
 
 void PopupWindow::showItemMenu(const QPoint &pos) {
@@ -672,7 +723,7 @@ void PopupWindow::showItemMenu(const QPoint &pos) {
     selectItemById(id);
 
     QMenu menu(this);
-    QAction *pasteAction = menu.addAction(QStringLiteral("Paste"));
+    QAction *pasteAction = menu.addAction(PasteController::canAutoPaste() ? QStringLiteral("Paste") : QStringLiteral("Copy and paste manually"));
     QAction *copyAction = menu.addAction(QStringLiteral("Copy only"));
     menu.addSeparator();
     QAction *pinAction = menu.addAction(item->pinned ? QStringLiteral("Unpin") : QStringLiteral("Pin"));
@@ -716,7 +767,7 @@ void PopupWindow::updateStatusForSelection() {
     }
 
     if (!list_ || list_->count() == 0 || !list_->currentItem()) {
-        statusLabel_->setText(QStringLiteral("Ready"));
+        statusLabel_->setText(AppIntegration::environmentSummary());
         return;
     }
 
@@ -727,7 +778,22 @@ void PopupWindow::updateStatusForSelection() {
         return;
     }
 
-    statusLabel_->setText(QStringLiteral("%1 selected • Enter to paste").arg(typeTitle(*item)));
+    if (PasteController::canAutoPaste()) {
+        statusLabel_->setText(QStringLiteral("%1 selected | Enter pastes").arg(typeTitle(*item)));
+    } else {
+        statusLabel_->setText(QStringLiteral("%1 selected | Enter copies").arg(typeTitle(*item)));
+    }
+}
+
+void PopupWindow::updateChromeText() {
+    if (shortcutHint_) {
+        shortcutHint_->setText(AppIntegration::configuredShortcutDisplay());
+    }
+    if (footerHint_) {
+        footerHint_->setText(PasteController::canAutoPaste()
+            ? QStringLiteral("Up/Down select | Enter paste | Ctrl+C copy only")
+            : QStringLiteral("Up/Down select | Enter copy | Ctrl+V paste in app"));
+    }
 }
 
 void PopupWindow::clearHistoryWithConfirmation() {
@@ -735,16 +801,20 @@ void PopupWindow::clearHistoryWithConfirmation() {
         return;
     }
 
-    const QMessageBox::StandardButton result = QMessageBox::question(
-        this,
-        QStringLiteral("Clear clipboard history"),
-        QStringLiteral("Delete all text history items for this session?"),
-        QMessageBox::Yes | QMessageBox::No,
-        QMessageBox::No);
+    if (AppSettings::confirmBeforeClear()) {
+        const QMessageBox::StandardButton result = QMessageBox::question(
+            this,
+            QStringLiteral("Clear clipboard history"),
+            QStringLiteral("Delete all unpinned clipboard items?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No);
 
-    if (result == QMessageBox::Yes) {
-        store_->clearUnpinned();
+        if (result != QMessageBox::Yes) {
+            return;
+        }
     }
+
+    store_->clearUnpinned();
 }
 
 void PopupWindow::repolish(QWidget *widget) const {
@@ -780,6 +850,12 @@ bool PopupWindow::handleKeyboardEvent(QKeyEvent *event, QObject *source) {
     if (ctrl && event->key() == Qt::Key_F) {
         search_->setFocus(Qt::ShortcutFocusReason);
         search_->selectAll();
+        event->accept();
+        return true;
+    }
+
+    if (ctrl && event->key() == Qt::Key_Comma) {
+        emit settingsRequested();
         event->accept();
         return true;
     }
@@ -895,7 +971,7 @@ void PopupWindow::beginPossibleDrag(const QPoint &globalPos, int clipId) {
 
 bool PopupWindow::tryStartSystemMove() {
     if (!windowHandle()) {
-        winId(); // ensure a native window exists before requesting compositor move
+        winId();
     }
     QWindow *window = windowHandle();
     if (!window) {
@@ -967,8 +1043,6 @@ bool PopupWindow::handleDragEvent(QObject *watched, QEvent *event) {
         beginPossibleDrag(mouseEvent->globalPosition().toPoint(), clipId);
         setCursor(Qt::OpenHandCursor);
 
-        // Header/empty-space drag should use the compositor-native move API.
-        // This is required on Wayland, where normal QWidget::move() can be ignored.
         if (clipId < 0 && tryStartSystemMove()) {
             event->accept();
             return true;
@@ -985,8 +1059,6 @@ bool PopupWindow::handleDragEvent(QObject *watched, QEvent *event) {
 
         const QPoint delta = mouseEvent->globalPosition().toPoint() - dragStartGlobal_;
         if (!dragging_ && delta.manhattanLength() >= QApplication::startDragDistance()) {
-            // For card drag on Wayland, try native move after the drag threshold.
-            // A simple click on the card still pastes normally.
             if (tryStartSystemMove()) {
                 event->accept();
                 return true;

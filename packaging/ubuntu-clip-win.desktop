@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Clipboard History
-Comment=Text-only Windows-style clipboard history popup
+Comment=Windows-style clipboard history popup for Linux
 Exec=ubuntu-clip-win --show
 Icon=ubuntu-clip-win
 Terminal=false

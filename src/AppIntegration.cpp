@@ -1,0 +1,310 @@
+#include "AppIntegration.h"
+
+#include "PasteController.h"
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QProcess>
+#include <QSaveFile>
+#include <QStandardPaths>
+#include <QStringList>
+#include <QTextStream>
+
+namespace {
+constexpr auto kExtensionUuid = "ubuntu-clip-win@amirhosein.local";
+constexpr auto kShortcutSchema = "org.gnome.shell.extensions.ubuntu-clip-win";
+constexpr auto kShortcutKey = "show-ubuntu-clip-win";
+
+QStringList candidateSchemaDirs() {
+    const QString uuid = QStringLiteral(kExtensionUuid);
+    return {
+        QDir::homePath() + QStringLiteral("/.local/share/gnome-shell/extensions/") + uuid + QStringLiteral("/schemas"),
+        QStringLiteral("/usr/local/share/gnome-shell/extensions/") + uuid + QStringLiteral("/schemas"),
+        QStringLiteral("/usr/share/gnome-shell/extensions/") + uuid + QStringLiteral("/schemas")
+    };
+}
+
+QString schemaDir() {
+    for (const QString &dirPath : candidateSchemaDirs()) {
+        const QFileInfo compiled(QDir(dirPath).filePath(QStringLiteral("gschemas.compiled")));
+        const QFileInfo xml(QDir(dirPath).filePath(QStringLiteral("org.gnome.shell.extensions.ubuntu-clip-win.gschema.xml")));
+        if (compiled.exists() || xml.exists()) {
+            return dirPath;
+        }
+    }
+    return {};
+}
+
+bool runProcess(const QString &program,
+                const QStringList &arguments,
+                QString *standardOutput = nullptr,
+                QString *standardError = nullptr,
+                int timeoutMs = 2000) {
+    QProcess process;
+    process.start(program, arguments);
+    if (!process.waitForFinished(timeoutMs)) {
+        process.kill();
+        process.waitForFinished(250);
+        if (standardError) {
+            *standardError = QStringLiteral("The command timed out.");
+        }
+        return false;
+    }
+
+    if (standardOutput) {
+        *standardOutput = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
+    }
+    if (standardError) {
+        *standardError = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
+    }
+    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+QString gsettingsPath() {
+    return QStandardPaths::findExecutable(QStringLiteral("gsettings"));
+}
+
+QString defaultShortcutDisplay() {
+    return QStringLiteral("Ctrl+Super+V");
+}
+
+QString shortcutValueToDisplay(QString rawValue) {
+    rawValue.remove(QLatin1Char('['));
+    rawValue.remove(QLatin1Char(']'));
+    rawValue.remove(QLatin1Char('\''));
+    rawValue.remove(QLatin1Char('"'));
+    rawValue = rawValue.trimmed();
+    if (rawValue.isEmpty()) {
+        return defaultShortcutDisplay();
+    }
+
+    rawValue.replace(QStringLiteral("<Primary>"), QStringLiteral("Ctrl+"), Qt::CaseInsensitive);
+    rawValue.replace(QStringLiteral("<Control>"), QStringLiteral("Ctrl+"), Qt::CaseInsensitive);
+    rawValue.replace(QStringLiteral("<Ctrl>"), QStringLiteral("Ctrl+"), Qt::CaseInsensitive);
+    rawValue.replace(QStringLiteral("<Super>"), QStringLiteral("Super+"), Qt::CaseInsensitive);
+    rawValue.replace(QStringLiteral("<Meta>"), QStringLiteral("Super+"), Qt::CaseInsensitive);
+    rawValue.replace(QStringLiteral("<Alt>"), QStringLiteral("Alt+"), Qt::CaseInsensitive);
+    rawValue.replace(QStringLiteral("<Shift>"), QStringLiteral("Shift+"), Qt::CaseInsensitive);
+    rawValue.replace(QStringLiteral("++"), QStringLiteral("+"));
+
+    QStringList parts = rawValue.split(QLatin1Char('+'), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) {
+        return defaultShortcutDisplay();
+    }
+
+    for (QString &part : parts) {
+        if (part.compare(QStringLiteral("ctrl"), Qt::CaseInsensitive) == 0) {
+            part = QStringLiteral("Ctrl");
+        } else if (part.compare(QStringLiteral("alt"), Qt::CaseInsensitive) == 0) {
+            part = QStringLiteral("Alt");
+        } else if (part.compare(QStringLiteral("shift"), Qt::CaseInsensitive) == 0) {
+            part = QStringLiteral("Shift");
+        } else if (part.compare(QStringLiteral("super"), Qt::CaseInsensitive) == 0
+                   || part.compare(QStringLiteral("meta"), Qt::CaseInsensitive) == 0
+                   || part.compare(QStringLiteral("win"), Qt::CaseInsensitive) == 0) {
+            part = QStringLiteral("Super");
+        } else if (part.size() == 1) {
+            part = part.toUpper();
+        }
+    }
+
+    return parts.join(QLatin1Char('+'));
+}
+
+QString displayShortcutToAccelerator(QString displayShortcut) {
+    displayShortcut = displayShortcut.trimmed();
+    if (displayShortcut.isEmpty()) {
+        return {};
+    }
+
+    QStringList parts = displayShortcut.split(QLatin1Char('+'), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) {
+        return {};
+    }
+
+    QString accelerator;
+    for (int index = 0; index < parts.size(); ++index) {
+        QString token = parts.at(index).trimmed();
+        if (token.compare(QStringLiteral("Ctrl"), Qt::CaseInsensitive) == 0
+            || token.compare(QStringLiteral("Control"), Qt::CaseInsensitive) == 0) {
+            accelerator += QStringLiteral("<Control>");
+            continue;
+        }
+        if (token.compare(QStringLiteral("Alt"), Qt::CaseInsensitive) == 0) {
+            accelerator += QStringLiteral("<Alt>");
+            continue;
+        }
+        if (token.compare(QStringLiteral("Shift"), Qt::CaseInsensitive) == 0) {
+            accelerator += QStringLiteral("<Shift>");
+            continue;
+        }
+        if (token.compare(QStringLiteral("Meta"), Qt::CaseInsensitive) == 0
+            || token.compare(QStringLiteral("Super"), Qt::CaseInsensitive) == 0
+            || token.compare(QStringLiteral("Win"), Qt::CaseInsensitive) == 0) {
+            accelerator += QStringLiteral("<Super>");
+            continue;
+        }
+
+        if (index != parts.size() - 1) {
+            return {};
+        }
+
+        if (token.size() == 1) {
+            accelerator += token.toLower();
+        } else {
+            accelerator += token;
+        }
+    }
+
+    return accelerator;
+}
+
+QString autostartFilePath() {
+    const QString configHome = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
+    return QDir(configHome).filePath(QStringLiteral("autostart/ubuntu-clip-win.desktop"));
+}
+
+QString autostartDesktopEntry() {
+    const QString executable = QCoreApplication::applicationFilePath();
+    return QStringLiteral(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=Clipboard History\n"
+        "Comment=Start clipboard history in the background\n"
+        "Exec=\"%1\" --background\n"
+        "Icon=ubuntu-clip-win\n"
+        "Terminal=false\n"
+        "X-GNOME-Autostart-enabled=true\n")
+        .arg(executable);
+}
+} // namespace
+
+QString AppIntegration::environmentSummary() {
+    if (PasteController::isWaylandSession()) {
+        return QStringLiteral("Wayland session: selecting an item copies it to the clipboard. Paste it with Ctrl+V in the target app.");
+    }
+    if (PasteController::canAutoPaste()) {
+        return QStringLiteral("X11 session: Enter pastes directly into the previous application.");
+    }
+    if (PasteController::isX11Session()) {
+        return QStringLiteral("X11 session without xdotool: items are copied, then you paste them manually with Ctrl+V.");
+    }
+    return QStringLiteral("Unknown desktop session: clipboard capture works, but paste automation may depend on your environment.");
+}
+
+QStringList AppIntegration::diagnosticsMessages() {
+    QStringList messages;
+    if (PasteController::isWaylandSession()) {
+        messages << QStringLiteral("Wayland is active. Clipboard items are restored to the clipboard, then you paste them with Ctrl+V in the target app.");
+    } else if (PasteController::isX11Session() && !PasteController::canAutoPaste()) {
+        messages << QStringLiteral("X11 is active but xdotool was not found. Install xdotool to enable one-key paste.");
+    }
+
+    if (!isShortcutConfigAvailable()) {
+        messages << QStringLiteral("GNOME shortcut integration is not available in this session. You can still open the window with ubuntu-clip-win --show.");
+    }
+    return messages;
+}
+
+bool AppIntegration::isShortcutConfigAvailable() {
+    return !schemaDir().isEmpty() && !gsettingsPath().isEmpty();
+}
+
+QString AppIntegration::configuredShortcutDisplay() {
+    if (!isShortcutConfigAvailable()) {
+        return defaultShortcutDisplay();
+    }
+
+    QString output;
+    const bool ok = runProcess(gsettingsPath(),
+                               {
+                                   QStringLiteral("--schemadir"),
+                                   schemaDir(),
+                                   QStringLiteral("get"),
+                                   QStringLiteral(kShortcutSchema),
+                                   QStringLiteral(kShortcutKey)
+                               },
+                               &output);
+    return ok ? shortcutValueToDisplay(output) : defaultShortcutDisplay();
+}
+
+bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut, QString *errorMessage) {
+    if (!isShortcutConfigAvailable()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("GNOME shortcut integration is not available on this system.");
+        }
+        return false;
+    }
+
+    const QString accelerator = displayShortcutToAccelerator(displayShortcut);
+    if (accelerator.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("The shortcut format is invalid.");
+        }
+        return false;
+    }
+
+    QString stderrText;
+    const bool ok = runProcess(gsettingsPath(),
+                               {
+                                   QStringLiteral("--schemadir"),
+                                   schemaDir(),
+                                   QStringLiteral("set"),
+                                   QStringLiteral(kShortcutSchema),
+                                   QStringLiteral(kShortcutKey),
+                                   QStringLiteral("['%1']").arg(accelerator)
+                               },
+                               nullptr,
+                               &stderrText);
+    if (!ok && errorMessage) {
+        *errorMessage = stderrText.isEmpty()
+            ? QStringLiteral("The shortcut could not be updated.")
+            : stderrText;
+    }
+    return ok;
+}
+
+bool AppIntegration::isAutostartEnabled() {
+    return QFileInfo::exists(autostartFilePath());
+}
+
+bool AppIntegration::setAutostartEnabled(bool enabled, QString *errorMessage) {
+    const QString path = autostartFilePath();
+    if (enabled) {
+        QDir dir(QFileInfo(path).absolutePath());
+        if (!dir.mkpath(QStringLiteral("."))) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("The autostart directory could not be created.");
+            }
+            return false;
+        }
+
+        QSaveFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("The autostart file could not be written.");
+            }
+            return false;
+        }
+
+        QTextStream stream(&file);
+        stream << autostartDesktopEntry();
+        if (!file.commit()) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("The autostart file could not be saved.");
+            }
+            return false;
+        }
+        return true;
+    }
+
+    if (QFile::exists(path) && !QFile::remove(path)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("The autostart file could not be removed.");
+        }
+        return false;
+    }
+    return true;
+}

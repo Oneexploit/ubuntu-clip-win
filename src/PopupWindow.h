@@ -14,6 +14,7 @@ class QKeyEvent;
 class QEvent;
 class QObject;
 class QFrame;
+class QListWidgetItem;
 
 class PopupWindow : public QWidget {
     Q_OBJECT
@@ -25,6 +26,11 @@ public slots:
     void showPopup();
     void showPopupForWindow(const QString &targetWindowId);
     void refreshItems();
+    void clearHistoryWithConfirmation();
+
+signals:
+    void settingsRequested();
+    void notificationRequested(const QString &title, const QString &message, bool warning);
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -35,7 +41,6 @@ private slots:
     void activateListItem(QListWidgetItem *item);
     void showItemMenu(const QPoint &pos);
     void updateSelectionStyles();
-    void clearHistoryWithConfirmation();
 
 private:
     QWidget *createItemWidget(const ClipItem &item);
@@ -46,6 +51,7 @@ private:
     void selectItemById(int id);
     void setSelectedItemToClipboardOnly();
     void updateStatusForSelection();
+    void updateChromeText();
     void repolish(QWidget *widget) const;
 
     bool handleKeyboardEvent(QKeyEvent *event, QObject *source = nullptr);
@@ -64,7 +70,10 @@ private:
     QListWidget *list_ = nullptr;
     QLabel *emptyLabel_ = nullptr;
     QLabel *statusLabel_ = nullptr;
+    QLabel *shortcutHint_ = nullptr;
+    QLabel *footerHint_ = nullptr;
     QPushButton *clearButton_ = nullptr;
+    QPushButton *settingsButton_ = nullptr;
     QString previousActiveWindowId_;
 
     bool pasteInProgress_ = false;
