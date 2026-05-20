@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PREFIX="/usr/local"
 KEEP_DATA=0
+TARGET_USER="${SUDO_USER:-$USER}"
+TARGET_HOME="${HOME}"
+
+if [[ -n "${SUDO_USER:-}" ]]; then
+  TARGET_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+fi
 
 usage() {
   cat <<'EOF'
@@ -43,17 +49,26 @@ if [[ -z "$PREFIX" ]]; then
   exit 1
 fi
 
+if [[ -z "$TARGET_USER" || -z "$TARGET_HOME" ]]; then
+  echo "Could not determine the target user for uninstall cleanup." >&2
+  exit 1
+fi
+
 APPLICATIONS_DIR="$PREFIX/share/applications"
 ICONS_DIR="$PREFIX/share/icons/hicolor"
-AUTOSTART_FILE="$HOME/.config/autostart/ubuntu-clip-win.desktop"
+AUTOSTART_FILE="$TARGET_HOME/.config/autostart/ubuntu-clip-win.desktop"
 LEGACY_SYSTEM_AUTOSTART="/etc/xdg/autostart/ubuntu-clip-win-autostart.desktop"
 
 pkill ubuntu-clip-win >/dev/null 2>&1 || true
 
 if [[ -x "$ROOT_DIR/gnome-extension/uninstall.sh" ]]; then
-  "$ROOT_DIR/gnome-extension/uninstall.sh" || true
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$TARGET_USER" env HOME="$TARGET_HOME" bash "$ROOT_DIR/gnome-extension/uninstall.sh" || true
+  else
+    bash "$ROOT_DIR/gnome-extension/uninstall.sh" || true
+  fi
 else
-  rm -rf "$HOME/.local/share/gnome-shell/extensions/ubuntu-clip-win@amirhosein.local"
+  rm -rf "$TARGET_HOME/.local/share/gnome-shell/extensions/ubuntu-clip-win@amirhosein.local"
 fi
 
 sudo rm -f "$PREFIX/bin/ubuntu-clip-win"
@@ -67,10 +82,10 @@ sudo rm -f "$LEGACY_SYSTEM_AUTOSTART" || true
 rm -f "$AUTOSTART_FILE"
 
 if [[ $KEEP_DATA -eq 0 ]]; then
-  rm -rf "$HOME/.local/share/AmirHosein/Ubuntu Clip Win"
-  rm -rf "$HOME/.local/share/ubuntu-clip-win"
-  rm -f "$HOME/.config/AmirHosein/Ubuntu Clip Win.conf"
-  rm -f "$HOME/.config/AmirHosein/Ubuntu Clip Win.ini"
+  rm -rf "$TARGET_HOME/.local/share/AmirHosein/Ubuntu Clip Win"
+  rm -rf "$TARGET_HOME/.local/share/ubuntu-clip-win"
+  rm -f "$TARGET_HOME/.config/AmirHosein/Ubuntu Clip Win.conf"
+  rm -f "$TARGET_HOME/.config/AmirHosein/Ubuntu Clip Win.ini"
 fi
 
 if command -v gtk-update-icon-cache >/dev/null 2>&1 && [[ -d "$ICONS_DIR" ]]; then

@@ -18,7 +18,7 @@ constexpr auto kShortcutSchema = "org.gnome.shell.extensions.ubuntu-clip-win";
 constexpr auto kShortcutKey = "show-ubuntu-clip-win";
 
 QStringList candidateSchemaDirs() {
-    const QString uuid = QStringLiteral(kExtensionUuid);
+    const QString uuid = QString::fromLatin1(kExtensionUuid);
     return {
         QDir::homePath() + QStringLiteral("/.local/share/gnome-shell/extensions/") + uuid + QStringLiteral("/schemas"),
         QStringLiteral("/usr/local/share/gnome-shell/extensions/") + uuid + QStringLiteral("/schemas"),
@@ -223,8 +223,8 @@ QString AppIntegration::configuredShortcutDisplay() {
                                    QStringLiteral("--schemadir"),
                                    schemaDir(),
                                    QStringLiteral("get"),
-                                   QStringLiteral(kShortcutSchema),
-                                   QStringLiteral(kShortcutKey)
+                                   QString::fromLatin1(kShortcutSchema),
+                                   QString::fromLatin1(kShortcutKey)
                                },
                                &output);
     return ok ? shortcutValueToDisplay(output) : defaultShortcutDisplay();
@@ -252,8 +252,8 @@ bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut
                                    QStringLiteral("--schemadir"),
                                    schemaDir(),
                                    QStringLiteral("set"),
-                                   QStringLiteral(kShortcutSchema),
-                                   QStringLiteral(kShortcutKey),
+                                   QString::fromLatin1(kShortcutSchema),
+                                   QString::fromLatin1(kShortcutKey),
                                    QStringLiteral("['%1']").arg(accelerator)
                                },
                                nullptr,

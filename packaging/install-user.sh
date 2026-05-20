@@ -6,6 +6,12 @@ PREFIX="/usr/local"
 BUILD_DIR="$ROOT_DIR/build"
 INSTALL_DEPS=1
 START_AFTER_INSTALL=1
+TARGET_USER="${SUDO_USER:-$USER}"
+TARGET_HOME="${HOME}"
+
+if [[ -n "${SUDO_USER:-}" ]]; then
+  TARGET_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+fi
 
 usage() {
   cat <<'EOF'
@@ -55,6 +61,11 @@ if [[ -z "$PREFIX" || -z "$BUILD_DIR" ]]; then
   exit 1
 fi
 
+if [[ -z "$TARGET_USER" || -z "$TARGET_HOME" ]]; then
+  echo "Could not determine the target user for user-level install steps." >&2
+  exit 1
+fi
+
 if [[ $INSTALL_DEPS -eq 1 && -x "$ROOT_DIR/packaging/install-deps-ubuntu.sh" && -x "$(command -v apt-get || true)" ]]; then
   "$ROOT_DIR/packaging/install-deps-ubuntu.sh"
 fi
@@ -66,7 +77,7 @@ sudo cmake --install "$BUILD_DIR"
 BINARY_PATH="$PREFIX/bin/ubuntu-clip-win"
 APPLICATIONS_DIR="$PREFIX/share/applications"
 ICONS_DIR="$PREFIX/share/icons/hicolor"
-AUTOSTART_FILE="$HOME/.config/autostart/ubuntu-clip-win.desktop"
+AUTOSTART_FILE="$TARGET_HOME/.config/autostart/ubuntu-clip-win.desktop"
 
 if [[ ! -x "$BINARY_PATH" ]]; then
   echo "Installed binary not found at: $BINARY_PATH" >&2
@@ -84,6 +95,7 @@ Icon=ubuntu-clip-win
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
+chown "$TARGET_USER":"$TARGET_USER" "$AUTOSTART_FILE" >/dev/null 2>&1 || true
 
 if command -v gtk-update-icon-cache >/dev/null 2>&1 && [[ -d "$ICONS_DIR" ]]; then
   sudo gtk-update-icon-cache -q -t -f "$ICONS_DIR" >/dev/null 2>&1 || true
@@ -94,15 +106,27 @@ if command -v update-desktop-database >/dev/null 2>&1 && [[ -d "$APPLICATIONS_DI
 fi
 
 if [[ -n "${XDG_CURRENT_DESKTOP:-}" ]] && [[ "${XDG_CURRENT_DESKTOP,,}" == *gnome* ]]; then
-  "$ROOT_DIR/gnome-extension/install.sh" || true
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$TARGET_USER" env HOME="$TARGET_HOME" bash "$ROOT_DIR/gnome-extension/install.sh" || true
+  else
+    bash "$ROOT_DIR/gnome-extension/install.sh" || true
+  fi
 elif command -v gnome-extensions >/dev/null 2>&1; then
-  "$ROOT_DIR/gnome-extension/install.sh" || true
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$TARGET_USER" env HOME="$TARGET_HOME" bash "$ROOT_DIR/gnome-extension/install.sh" || true
+  else
+    bash "$ROOT_DIR/gnome-extension/install.sh" || true
+  fi
 fi
 
 pkill ubuntu-clip-win >/dev/null 2>&1 || true
 
 if [[ $START_AFTER_INSTALL -eq 1 ]]; then
-  nohup "$BINARY_PATH" --background >/dev/null 2>&1 &
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$TARGET_USER" env HOME="$TARGET_HOME" nohup "$BINARY_PATH" --background >/dev/null 2>&1 &
+  else
+    nohup "$BINARY_PATH" --background >/dev/null 2>&1 &
+  fi
 fi
 
 echo "Install completed."

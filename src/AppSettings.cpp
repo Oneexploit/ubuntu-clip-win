@@ -15,45 +15,45 @@ int boundedHistoryLimit(int value) {
 } // namespace
 
 bool AppSettings::persistentHistory() {
-    return QSettings().value(QStringLiteral(kPersistentHistoryKey), false).toBool();
+    return QSettings().value(QString::fromLatin1(kPersistentHistoryKey), false).toBool();
 }
 
 void AppSettings::setPersistentHistory(bool enabled) {
-    QSettings().setValue(QStringLiteral(kPersistentHistoryKey), enabled);
+    QSettings().setValue(QString::fromLatin1(kPersistentHistoryKey), enabled);
 }
 
 int AppSettings::historyLimit() {
-    return boundedHistoryLimit(QSettings().value(QStringLiteral(kHistoryLimitKey), 120).toInt());
+    return boundedHistoryLimit(QSettings().value(QString::fromLatin1(kHistoryLimitKey), 120).toInt());
 }
 
 void AppSettings::setHistoryLimit(int value) {
-    QSettings().setValue(QStringLiteral(kHistoryLimitKey), boundedHistoryLimit(value));
+    QSettings().setValue(QString::fromLatin1(kHistoryLimitKey), boundedHistoryLimit(value));
 }
 
 bool AppSettings::confirmBeforeClear() {
-    return QSettings().value(QStringLiteral(kConfirmBeforeClearKey), true).toBool();
+    return QSettings().value(QString::fromLatin1(kConfirmBeforeClearKey), true).toBool();
 }
 
 void AppSettings::setConfirmBeforeClear(bool enabled) {
-    QSettings().setValue(QStringLiteral(kConfirmBeforeClearKey), enabled);
+    QSettings().setValue(QString::fromLatin1(kConfirmBeforeClearKey), enabled);
 }
 
 bool AppSettings::showStartupDiagnostics() {
-    return QSettings().value(QStringLiteral(kShowStartupDiagnosticsKey), true).toBool();
+    return QSettings().value(QString::fromLatin1(kShowStartupDiagnosticsKey), true).toBool();
 }
 
 void AppSettings::setShowStartupDiagnostics(bool enabled) {
     QSettings settings;
-    settings.setValue(QStringLiteral(kShowStartupDiagnosticsKey), enabled);
+    settings.setValue(QString::fromLatin1(kShowStartupDiagnosticsKey), enabled);
     if (enabled) {
-        settings.setValue(QStringLiteral(kStartupDiagnosticsShownKey), false);
+        settings.setValue(QString::fromLatin1(kStartupDiagnosticsShownKey), false);
     }
 }
 
 bool AppSettings::startupDiagnosticsShown() {
-    return QSettings().value(QStringLiteral(kStartupDiagnosticsShownKey), false).toBool();
+    return QSettings().value(QString::fromLatin1(kStartupDiagnosticsShownKey), false).toBool();
 }
 
 void AppSettings::setStartupDiagnosticsShown(bool shown) {
-    QSettings().setValue(QStringLiteral(kStartupDiagnosticsShownKey), shown);
+    QSettings().setValue(QString::fromLatin1(kStartupDiagnosticsShownKey), shown);
 }
