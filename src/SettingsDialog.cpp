@@ -92,7 +92,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     shortcutHint_ = new QLabel(integrationGroup);
     shortcutHint_->setWordWrap(true);
     if (AppIntegration::isShortcutConfigAvailable()) {
-        shortcutHint_->setText(QStringLiteral("Press a single combination such as Ctrl+Super+V. This updates the GNOME Shell extension shortcut."));
+        shortcutHint_->setText(QStringLiteral("Press a single combination such as Ctrl+Alt+V. This updates the GNOME Shell extension shortcut."));
     } else {
         shortcutHint_->setText(QStringLiteral("Shortcut editing is unavailable because the GNOME extension schema could not be found from this app."));
     }

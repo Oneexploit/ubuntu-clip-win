@@ -4,7 +4,7 @@ set -euo pipefail
 UUID="ubuntu-clip-win@amirhosein.local"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="$HOME/.local/share/gnome-shell/extensions/$UUID"
-SHORTCUT="['<Control><Super>v']"
+SHORTCUT="['<Control><Alt>v']"
 SCHEMA="org.gnome.shell.extensions.ubuntu-clip-win"
 KEY="show-ubuntu-clip-win"
 
@@ -25,5 +25,5 @@ if command -v gnome-extensions >/dev/null 2>&1; then
 fi
 
 echo "GNOME extension installed: $UUID"
-echo "Shortcut: Ctrl+Super+V"
+echo "Shortcut: Ctrl+Alt+V"
 echo "On Wayland, log out and log back in if the shortcut does not appear immediately."

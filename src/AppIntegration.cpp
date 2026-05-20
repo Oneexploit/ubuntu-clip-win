@@ -66,8 +66,12 @@ QString gsettingsPath() {
     return QStandardPaths::findExecutable(QStringLiteral("gsettings"));
 }
 
+QString gnomeExtensionsPath() {
+    return QStandardPaths::findExecutable(QStringLiteral("gnome-extensions"));
+}
+
 QString defaultShortcutDisplay() {
-    return QStringLiteral("Ctrl+Super+V");
+    return QStringLiteral("Ctrl+Alt+V");
 }
 
 QString normalizeKeyToken(QString token) {
@@ -274,6 +278,17 @@ QString autostartDesktopEntry() {
         "X-GNOME-Autostart-enabled=true\n")
         .arg(executable);
 }
+
+void refreshGnomeExtensionShortcutBinding() {
+    const QString gnomeExtensions = gnomeExtensionsPath();
+    if (gnomeExtensions.isEmpty()) {
+        return;
+    }
+
+    const QString uuid = QString::fromLatin1(kExtensionUuid);
+    runProcess(gnomeExtensions, {QStringLiteral("disable"), uuid}, nullptr, nullptr, 4000);
+    runProcess(gnomeExtensions, {QStringLiteral("enable"), uuid}, nullptr, nullptr, 4000);
+}
 } // namespace
 
 QString AppIntegration::environmentSummary() {
@@ -375,6 +390,9 @@ bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut
         *errorMessage = stderrText.isEmpty()
             ? QStringLiteral("The shortcut could not be updated.")
             : stderrText;
+    }
+    if (ok) {
+        refreshGnomeExtensionShortcutBinding();
     }
     return ok;
 }

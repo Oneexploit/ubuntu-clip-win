@@ -133,7 +133,7 @@ echo "Install completed."
 echo "Binary: $BINARY_PATH"
 echo "Open popup: $BINARY_PATH --show"
 echo "Open settings: $BINARY_PATH --settings"
-echo "Shortcut: Ctrl+Super+V"
+echo "Shortcut: Ctrl+Alt+V"
 if [[ $START_AFTER_INSTALL -eq 1 ]]; then
   echo "The app was started in the background."
 fi

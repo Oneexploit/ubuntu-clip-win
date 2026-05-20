@@ -4,17 +4,16 @@
 
 A Windows-inspired clipboard history popup for Ubuntu/Linux, built with C++ and Qt 6.
 
-Press `Ctrl + Super + V`, browse recent clipboard items, restore one with the keyboard or mouse, and keep important items pinned at the top.
+Press `Ctrl + Alt + V`, browse recent clipboard items, restore one with the keyboard or mouse, and keep important items pinned at the top.
 
 ## Features
 
 - Windows-style popup with search, keyboard navigation, mouse support, tray menu, and draggable position
-- Multi-format clipboard history
+- Text-focused clipboard history
   - Plain text
   - Code snippets and terminal output
-  - Rich text / HTML
-  - Images
-  - File copies when the desktop exposes them through clipboard formats
+  - Rich text / HTML converted to plain text
+  - Files and images are ignored intentionally
 - Real pinned items
   - Pinned items stay at the top
   - Pinned items survive restarts
@@ -38,10 +37,8 @@ Press `Ctrl + Super + V`, browse recent clipboard items, restore one with the ke
 Default shortcut:
 
 ```text
-Ctrl + Super + V
+Ctrl + Alt + V
 ```
-
-On most Linux keyboards, `Super` is the Windows key.
 
 ## Install
 
@@ -113,7 +110,7 @@ ubuntu-clip-win --settings
 ## Usage
 
 1. Copy text from any app. Rich text is stored as plain text.
-2. Press `Ctrl + Super + V`.
+2. Press `Ctrl + Alt + V`.
 3. Use `Up` / `Down` to choose an item.
 4. Press `Enter`.
 
@@ -143,7 +140,7 @@ Only text history is stored in this build. Files and images are ignored.
 
 ## GNOME Shortcut
 
-The repository includes a GNOME Shell extension that binds `Ctrl + Super + V`.
+The repository includes a GNOME Shell extension that binds `Ctrl + Alt + V`.
 
 Manual install:
 

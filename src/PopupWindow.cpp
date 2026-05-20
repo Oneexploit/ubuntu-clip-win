@@ -1088,9 +1088,18 @@ bool PopupWindow::eventFilter(QObject *watched, QEvent *event) {
     }
 
     if (event->type() == QEvent::MouseButtonRelease) {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (watchedListViewport && isPlainLeftClick(mouseEvent)) {
+            if (QListWidgetItem *row = list_->itemAt(mouseEvent->pos())) {
+                const int id = row->data(Qt::UserRole).toInt();
+                selectItemById(id);
+                activateById(id);
+                return true;
+            }
+        }
+
         auto *widget = qobject_cast<QWidget *>(watched);
         if (widget && widget->property("clipId").isValid()) {
-            auto *mouseEvent = static_cast<QMouseEvent *>(event);
             if (isPlainLeftClick(mouseEvent)) {
                 const int id = widget->property("clipId").toInt();
                 selectItemById(id);
