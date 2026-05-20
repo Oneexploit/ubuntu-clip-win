@@ -617,14 +617,14 @@ void PopupWindow::activateListItem(QListWidgetItem *item) {
     if (!item) {
         return;
     }
-    activateById(item->data(Qt::UserRole).toInt());
+    activateById(item->data(Qt::UserRole).toInt(), ActivationSource::Keyboard);
 }
 
 void PopupWindow::activateCurrentItem() {
     activateListItem(list_->currentItem());
 }
 
-void PopupWindow::activateById(int id) {
+void PopupWindow::activateById(int id, ActivationSource source) {
     if (!store_ || pasteInProgress_) {
         return;
     }
@@ -652,10 +652,11 @@ void PopupWindow::activateById(int id) {
 
     const QString targetWindowId = previousActiveWindowId_;
     const QPoint targetPoint = previousPointerGlobalPos_;
-    QTimer::singleShot(kPasteDelayMs, this, [this, targetWindowId, targetPoint]() {
-        const bool pasted = PasteController::tryPasteToWindow(targetWindowId, targetPoint);
+    const bool strictMouseTarget = source == ActivationSource::Mouse;
+    QTimer::singleShot(kPasteDelayMs, this, [this, targetWindowId, targetPoint, strictMouseTarget, source]() {
+        const bool pasted = PasteController::tryPasteToWindow(targetWindowId, targetPoint, strictMouseTarget);
         pasteInProgress_ = false;
-        if (!pasted) {
+        if (!pasted && source != ActivationSource::Mouse) {
             emit notificationRequested(QStringLiteral("Clipboard History"),
                                        QStringLiteral("The item was copied, but auto-paste was unavailable. Press Ctrl+V in the target app."),
                                        true);
@@ -717,7 +718,7 @@ void PopupWindow::showItemMenu(const QPoint &pos) {
     }
 
     if (chosen == pasteAction) {
-        activateById(id);
+        activateById(id, ActivationSource::Menu);
     } else if (chosen == copyAction) {
         setSelectedItemToClipboardOnly();
     } else if (chosen == pinAction) {
@@ -1093,7 +1094,7 @@ bool PopupWindow::eventFilter(QObject *watched, QEvent *event) {
             if (QListWidgetItem *row = list_->itemAt(mouseEvent->pos())) {
                 const int id = row->data(Qt::UserRole).toInt();
                 selectItemById(id);
-                activateById(id);
+                activateById(id, ActivationSource::Mouse);
                 return true;
             }
         }
@@ -1103,7 +1104,7 @@ bool PopupWindow::eventFilter(QObject *watched, QEvent *event) {
             if (isPlainLeftClick(mouseEvent)) {
                 const int id = widget->property("clipId").toInt();
                 selectItemById(id);
-                activateById(id);
+                activateById(id, ActivationSource::Mouse);
                 return true;
             }
         }

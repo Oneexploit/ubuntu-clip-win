@@ -45,11 +45,17 @@ private slots:
     void updateSelectionStyles();
 
 private:
+    enum class ActivationSource {
+        Keyboard,
+        Mouse,
+        Menu
+    };
+
     QWidget *createItemWidget(const ClipItem &item);
     QString typeTitle(const ClipItem &item) const;
     QString relativeTime(const QDateTime &utcDate) const;
     QString emptyStateText(bool searchIsActive) const;
-    void activateById(int id);
+    void activateById(int id, ActivationSource source = ActivationSource::Keyboard);
     void selectItemById(int id);
     void setSelectedItemToClipboardOnly();
     void updateStatusForSelection();
