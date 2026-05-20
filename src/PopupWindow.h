@@ -59,7 +59,7 @@ private:
     bool handleKeyboardEvent(QKeyEvent *event, QObject *source = nullptr);
     bool handleDragEvent(QObject *watched, QEvent *event);
     bool watchedObjectCanStartDrag(QObject *watched) const;
-    void beginPossibleDrag(const QPoint &globalPos, int clipId = -1);
+    void beginPossibleDrag(const QPoint &globalPos);
     void watchForDragRelease();
     bool tryStartSystemMove();
     bool updateDrag(const QPoint &globalPos);
@@ -69,6 +69,7 @@ private:
 
     ClipboardStore *store_ = nullptr;
     QFrame *panel_ = nullptr;
+    QWidget *headerBar_ = nullptr;
     QLineEdit *search_ = nullptr;
     QListWidget *list_ = nullptr;
     QLabel *emptyLabel_ = nullptr;
@@ -85,8 +86,8 @@ private:
     bool dragReleaseWatchScheduled_ = false;
     bool hasUserPosition_ = false;
     bool targetWindowProvided_ = false;
-    int pressedClipId_ = -1;
     QPoint dragStartGlobal_;
     QPoint dragWindowStart_;
+    QPoint previousPointerGlobalPos_;
     QPoint userPosition_;
 };

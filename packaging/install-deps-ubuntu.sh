@@ -5,6 +5,8 @@ sudo apt update
 sudo apt install -y \
   build-essential \
   cmake \
+  libx11-dev \
+  libxcb1-dev \
   qt6-base-dev \
   libqt6sql6-sqlite \
   qt6-qpa-plugins \

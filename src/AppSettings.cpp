@@ -6,6 +6,7 @@ namespace {
 constexpr auto kPersistentHistoryKey = "history/persistent";
 constexpr auto kHistoryLimitKey = "history/limit";
 constexpr auto kConfirmBeforeClearKey = "history/confirm_before_clear";
+constexpr auto kGlobalShortcutKey = "shortcut/display";
 constexpr auto kShowStartupDiagnosticsKey = "startup/show_diagnostics";
 constexpr auto kStartupDiagnosticsShownKey = "startup/diagnostics_shown";
 
@@ -56,4 +57,12 @@ bool AppSettings::startupDiagnosticsShown() {
 
 void AppSettings::setStartupDiagnosticsShown(bool shown) {
     QSettings().setValue(QString::fromLatin1(kStartupDiagnosticsShownKey), shown);
+}
+
+QString AppSettings::globalShortcut() {
+    return QSettings().value(QString::fromLatin1(kGlobalShortcutKey), QStringLiteral("Ctrl+Alt+V")).toString();
+}
+
+void AppSettings::setGlobalShortcut(const QString &shortcutDisplay) {
+    QSettings().setValue(QString::fromLatin1(kGlobalShortcutKey), shortcutDisplay.trimmed());
 }

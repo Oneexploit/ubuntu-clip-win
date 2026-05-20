@@ -23,6 +23,25 @@ bool runXdotool(const QStringList &arguments, int timeoutMs = 1000) {
 
     return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
 }
+
+bool focusStoredPoint(const QPoint &screenPoint) {
+    if (screenPoint.x() < 0 || screenPoint.y() < 0) {
+        return false;
+    }
+
+    const bool moved = runXdotool({
+        QStringLiteral("mousemove"),
+        QStringLiteral("--sync"),
+        QString::number(screenPoint.x()),
+        QString::number(screenPoint.y())
+    }, 1200);
+    if (!moved) {
+        return false;
+    }
+
+    QThread::msleep(80);
+    return runXdotool({QStringLiteral("click"), QStringLiteral("1")}, 1200);
+}
 } // namespace
 
 QString PasteController::xdotoolPath() {
@@ -60,7 +79,7 @@ QString PasteController::activeWindowId() {
     return QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
 }
 
-bool PasteController::tryPasteToWindow(const QString &windowId) {
+bool PasteController::tryPasteToWindow(const QString &windowId, const QPoint &screenPoint) {
     if (!canAutoPaste()) {
         return false;
     }
@@ -70,6 +89,10 @@ bool PasteController::tryPasteToWindow(const QString &windowId) {
         runXdotool({QStringLiteral("windowactivate"), QStringLiteral("--sync"), target}, 1200);
         runXdotool({QStringLiteral("windowfocus"), QStringLiteral("--sync"), target}, 1200);
         QThread::msleep(140);
+
+        if (focusStoredPoint(screenPoint)) {
+            QThread::msleep(90);
+        }
 
         const QString active = activeWindowId();
         if (!active.isEmpty() && active != target) {

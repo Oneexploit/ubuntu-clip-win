@@ -69,46 +69,46 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
 
     panel_ = new QFrame(this);
     panel_->setObjectName(QStringLiteral("panel"));
-    panel_->installEventFilter(this);
     outerLayout->addWidget(panel_);
 
     auto *layout = new QVBoxLayout(panel_);
     layout->setContentsMargins(16, 14, 16, 13);
     layout->setSpacing(10);
 
-    auto *header = new QHBoxLayout();
+    headerBar_ = new QWidget(panel_);
+    headerBar_->setObjectName(QStringLiteral("headerBar"));
+    headerBar_->installEventFilter(this);
+
+    auto *header = new QHBoxLayout(headerBar_);
+    header->setContentsMargins(0, 0, 0, 0);
     header->setSpacing(10);
 
-    auto *logo = new QLabel(panel_);
+    auto *logo = new QLabel(headerBar_);
     logo->setObjectName(QStringLiteral("appLogo"));
     logo->setFixedSize(36, 36);
     logo->setAlignment(Qt::AlignCenter);
     logo->setScaledContents(true);
     logo->setPixmap(QPixmap(QStringLiteral(":/icons/ubuntu-clip-win.png")).scaled(36, 36, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    logo->setCursor(Qt::OpenHandCursor);
     logo->installEventFilter(this);
 
     auto *titleBlock = new QVBoxLayout();
     titleBlock->setSpacing(1);
-    auto *title = new QLabel(QStringLiteral("Clipboard History"), panel_);
+    auto *title = new QLabel(QStringLiteral("Clipboard History"), headerBar_);
     title->setObjectName(QStringLiteral("title"));
-    title->setCursor(Qt::OpenHandCursor);
     title->installEventFilter(this);
 
-    statusLabel_ = new QLabel(QStringLiteral("Ready"), panel_);
+    statusLabel_ = new QLabel(QStringLiteral("Ready"), headerBar_);
     statusLabel_->setObjectName(QStringLiteral("subtitle"));
-    statusLabel_->setCursor(Qt::OpenHandCursor);
     statusLabel_->installEventFilter(this);
     titleBlock->addWidget(title);
     titleBlock->addWidget(statusLabel_);
 
-    shortcutHint_ = new QLabel(panel_);
+    shortcutHint_ = new QLabel(headerBar_);
     shortcutHint_->setObjectName(QStringLiteral("keyCap"));
     shortcutHint_->setAlignment(Qt::AlignCenter);
-    shortcutHint_->setCursor(Qt::OpenHandCursor);
     shortcutHint_->installEventFilter(this);
 
-    auto *closeButton = new QPushButton(QStringLiteral("x"), panel_);
+    auto *closeButton = new QPushButton(QStringLiteral("x"), headerBar_);
     closeButton->setObjectName(QStringLiteral("closeButton"));
     closeButton->setFixedSize(30, 30);
     closeButton->setToolTip(QStringLiteral("Close"));
@@ -118,7 +118,7 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
     header->addLayout(titleBlock, 1);
     header->addWidget(shortcutHint_);
     header->addWidget(closeButton);
-    layout->addLayout(header);
+    layout->addWidget(headerBar_);
 
     search_ = new QLineEdit(panel_);
     search_->setObjectName(QStringLiteral("searchBox"));
@@ -147,8 +147,6 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
     emptyLabel_->setTextFormat(Qt::RichText);
     emptyLabel_->setAlignment(Qt::AlignCenter);
     emptyLabel_->setWordWrap(true);
-    emptyLabel_->setCursor(Qt::OpenHandCursor);
-    emptyLabel_->installEventFilter(this);
     emptyLabel_->hide();
     layout->addWidget(emptyLabel_, 1);
 
@@ -166,8 +164,6 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
 
     footerHint_ = new QLabel(panel_);
     footerHint_->setObjectName(QStringLiteral("footerHint"));
-    footerHint_->setCursor(Qt::OpenHandCursor);
-    footerHint_->installEventFilter(this);
 
     footer->addWidget(settingsButton_);
     footer->addWidget(clearButton_);
@@ -381,6 +377,7 @@ void PopupWindow::showPopup() {
     } else {
         previousActiveWindowId_ = PasteController::activeWindowId();
     }
+    previousPointerGlobalPos_ = QCursor::pos();
     pasteInProgress_ = false;
 
     if (search_) {
@@ -654,8 +651,9 @@ void PopupWindow::activateById(int id) {
     hide();
 
     const QString targetWindowId = previousActiveWindowId_;
-    QTimer::singleShot(kPasteDelayMs, this, [this, targetWindowId]() {
-        const bool pasted = PasteController::tryPasteToWindow(targetWindowId);
+    const QPoint targetPoint = previousPointerGlobalPos_;
+    QTimer::singleShot(kPasteDelayMs, this, [this, targetWindowId, targetPoint]() {
+        const bool pasted = PasteController::tryPasteToWindow(targetWindowId, targetPoint);
         pasteInProgress_ = false;
         if (!pasted) {
             emit notificationRequested(QStringLiteral("Clipboard History"),
@@ -926,7 +924,7 @@ bool PopupWindow::handleKeyboardEvent(QKeyEvent *event, QObject *source) {
 }
 
 bool PopupWindow::watchedObjectCanStartDrag(QObject *watched) const {
-    if (watched == this || watched == panel_ || watched == emptyLabel_ || watched == statusLabel_) {
+    if (watched == headerBar_) {
         return true;
     }
 
@@ -936,15 +934,14 @@ bool PopupWindow::watchedObjectCanStartDrag(QObject *watched) const {
     }
 
     return widget->objectName() == QStringLiteral("title")
+        || widget->objectName() == QStringLiteral("subtitle")
         || widget->objectName() == QStringLiteral("appLogo")
-        || widget->objectName() == QStringLiteral("keyCap")
-        || widget->objectName() == QStringLiteral("footerHint");
+        || widget->objectName() == QStringLiteral("keyCap");
 }
 
-void PopupWindow::beginPossibleDrag(const QPoint &globalPos, int clipId) {
+void PopupWindow::beginPossibleDrag(const QPoint &globalPos) {
     dragCandidate_ = true;
     dragging_ = false;
-    pressedClipId_ = clipId;
     dragStartGlobal_ = globalPos;
     dragWindowStart_ = pos();
 }
@@ -962,7 +959,6 @@ void PopupWindow::watchForDragRelease() {
         }
 
         if (!QGuiApplication::mouseButtons().testFlag(Qt::LeftButton)) {
-            unsetCursor();
             finishDrag();
             return;
         }
@@ -983,7 +979,6 @@ bool PopupWindow::tryStartSystemMove() {
     const bool started = window->startSystemMove();
     if (started) {
         dragging_ = true;
-        setCursor(Qt::ClosedHandCursor);
     }
     return started;
 }
@@ -1014,7 +1009,6 @@ void PopupWindow::finishDrag() {
     }
     dragCandidate_ = false;
     dragging_ = false;
-    pressedClipId_ = -1;
 }
 
 bool PopupWindow::handleDragEvent(QObject *watched, QEvent *event) {
@@ -1022,31 +1016,20 @@ bool PopupWindow::handleDragEvent(QObject *watched, QEvent *event) {
         return false;
     }
 
-    const bool hasListViewport = list_ && list_->viewport();
-
     if (event->type() == QEvent::MouseButtonPress) {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         if (mouseEvent->button() != Qt::LeftButton) {
             return false;
         }
 
-        int clipId = -1;
-        auto *widget = qobject_cast<QWidget *>(watched);
-        if (widget && widget->property("clipId").isValid()) {
-            clipId = widget->property("clipId").toInt();
-        }
-
-        const bool emptyListArea = hasListViewport && watched == list_->viewport() && !list_->itemAt(mouseEvent->pos());
-        const bool dragZone = emptyListArea || watchedObjectCanStartDrag(watched);
-        if (!dragZone) {
+        if (!watchedObjectCanStartDrag(watched)) {
             return false;
         }
 
-        beginPossibleDrag(mouseEvent->globalPosition().toPoint(), clipId);
-        setCursor(Qt::ClosedHandCursor);
+        beginPossibleDrag(mouseEvent->globalPosition().toPoint());
         watchForDragRelease();
 
-        if (clipId < 0 && tryStartSystemMove()) {
+        if (tryStartSystemMove()) {
             event->accept();
             return true;
         }
@@ -1069,7 +1052,6 @@ bool PopupWindow::handleDragEvent(QObject *watched, QEvent *event) {
         }
 
         if (updateDrag(mouseEvent->globalPosition().toPoint())) {
-            setCursor(Qt::ClosedHandCursor);
             event->accept();
             return true;
         }
@@ -1081,7 +1063,6 @@ bool PopupWindow::handleDragEvent(QObject *watched, QEvent *event) {
         }
         const bool wasDragging = dragging_;
         finishDrag();
-        unsetCursor();
         if (wasDragging) {
             event->accept();
             return true;
@@ -1141,6 +1122,5 @@ void PopupWindow::keyPressEvent(QKeyEvent *event) {
 
 void PopupWindow::hideEvent(QHideEvent *event) {
     finishDrag();
-    unsetCursor();
     QWidget::hideEvent(event);
 }

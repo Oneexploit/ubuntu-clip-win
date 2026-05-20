@@ -2,6 +2,7 @@
 
 #include "AppIntegration.h"
 #include "AppSettings.h"
+#include "PasteController.h"
 
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -85,16 +86,17 @@ SettingsDialog::SettingsDialog(QWidget *parent)
 
     shortcutEdit_ = new QKeySequenceEdit(integrationGroup);
     shortcutEdit_->setKeySequence(QKeySequence::fromString(shortcutForEditor(shortcutDisplayAtLoad_), QKeySequence::PortableText));
-    shortcutEdit_->setEnabled(AppIntegration::isShortcutConfigAvailable());
     shortcutForm->addRow(QStringLiteral("Global shortcut"), shortcutEdit_);
     integrationLayout->addLayout(shortcutForm);
 
     shortcutHint_ = new QLabel(integrationGroup);
     shortcutHint_->setWordWrap(true);
-    if (AppIntegration::isShortcutConfigAvailable()) {
-        shortcutHint_->setText(QStringLiteral("Press a single combination such as Ctrl+Alt+V. This updates the GNOME Shell extension shortcut."));
+    if (PasteController::isX11Session()) {
+        shortcutHint_->setText(QStringLiteral("Press a single combination such as Ctrl+Alt+V. On Linux/X11 the app listens for this shortcut directly."));
+    } else if (AppIntegration::isShortcutConfigAvailable()) {
+        shortcutHint_->setText(QStringLiteral("Press a single combination such as Ctrl+Alt+V. On Wayland this is synced to the GNOME Shell extension shortcut."));
     } else {
-        shortcutHint_->setText(QStringLiteral("Shortcut editing is unavailable because the GNOME extension schema could not be found from this app."));
+        shortcutHint_->setText(QStringLiteral("You can save a shortcut here, but on Wayland it only works after the GNOME Shell extension is installed and active."));
     }
     integrationLayout->addWidget(shortcutHint_);
 
@@ -109,18 +111,15 @@ SettingsDialog::SettingsDialog(QWidget *parent)
 void SettingsDialog::accept() {
     QString errorMessage;
     const bool autostartChanged = autostart_->isChecked() != autostartWasEnabled_;
-    const bool shortcutAvailable = AppIntegration::isShortcutConfigAvailable();
     QString shortcutText;
-    if (shortcutAvailable) {
-        shortcutText = AppIntegration::normalizeShortcutDisplay(shortcutEdit_->keySequence().toString(QKeySequence::PortableText));
-        if (shortcutText.isEmpty()) {
-            shortcutText = AppIntegration::normalizeShortcutDisplay(shortcutEdit_->keySequence().toString(QKeySequence::NativeText));
-        }
+    shortcutText = AppIntegration::normalizeShortcutDisplay(shortcutEdit_->keySequence().toString(QKeySequence::PortableText));
+    if (shortcutText.isEmpty()) {
+        shortcutText = AppIntegration::normalizeShortcutDisplay(shortcutEdit_->keySequence().toString(QKeySequence::NativeText));
     }
     const QString originalShortcut = AppIntegration::normalizeShortcutDisplay(shortcutDisplayAtLoad_);
-    const bool shortcutChanged = shortcutAvailable && shortcutText != originalShortcut;
+    const bool shortcutChanged = shortcutText != originalShortcut;
 
-    if (shortcutAvailable && shortcutText.isEmpty()) {
+    if (shortcutText.isEmpty()) {
         QMessageBox::warning(this,
                              QStringLiteral("Clipboard Settings"),
                              QStringLiteral("Please press one valid shortcut combination before saving."));

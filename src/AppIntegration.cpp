@@ -1,5 +1,6 @@
 #include "AppIntegration.h"
 
+#include "AppSettings.h"
 #include "PasteController.h"
 
 #include <QCoreApplication>
@@ -289,6 +290,10 @@ void refreshGnomeExtensionShortcutBinding() {
     runProcess(gnomeExtensions, {QStringLiteral("disable"), uuid}, nullptr, nullptr, 4000);
     runProcess(gnomeExtensions, {QStringLiteral("enable"), uuid}, nullptr, nullptr, 4000);
 }
+
+bool isGnomeShortcutBackendAvailable() {
+    return !schemaDir().isEmpty() && !gsettingsPath().isEmpty();
+}
 } // namespace
 
 QString AppIntegration::environmentSummary() {
@@ -312,18 +317,25 @@ QStringList AppIntegration::diagnosticsMessages() {
         messages << QStringLiteral("X11 is active but xdotool was not found. Install xdotool to enable one-key paste.");
     }
 
-    if (!isShortcutConfigAvailable()) {
-        messages << QStringLiteral("GNOME shortcut integration is not available in this session. You can still open the window with ubuntu-clip-win --show.");
+    if (PasteController::isX11Session()) {
+        messages << QStringLiteral("X11 is active. The app handles the global shortcut directly on Linux without needing a GNOME extension.");
+    } else if (!isGnomeShortcutBackendAvailable()) {
+        messages << QStringLiteral("Wayland needs the GNOME shortcut extension for a global hotkey. You can still open the window with ubuntu-clip-win --show.");
     }
     return messages;
 }
 
 bool AppIntegration::isShortcutConfigAvailable() {
-    return !schemaDir().isEmpty() && !gsettingsPath().isEmpty();
+    return PasteController::isX11Session() || isGnomeShortcutBackendAvailable();
 }
 
 QString AppIntegration::configuredShortcutDisplay() {
-    if (!isShortcutConfigAvailable()) {
+    const QString storedShortcut = normalizeShortcutDisplay(AppSettings::globalShortcut());
+    if (!storedShortcut.isEmpty()) {
+        return storedShortcut;
+    }
+
+    if (!isGnomeShortcutBackendAvailable()) {
         return defaultShortcutDisplay();
     }
 
@@ -338,7 +350,11 @@ QString AppIntegration::configuredShortcutDisplay() {
                                },
                                &output);
     const QString shortcut = ok ? shortcutValueToDisplay(output) : QString();
-    return shortcut.isEmpty() ? defaultShortcutDisplay() : shortcut;
+    if (!shortcut.isEmpty()) {
+        AppSettings::setGlobalShortcut(shortcut);
+        return shortcut;
+    }
+    return defaultShortcutDisplay();
 }
 
 QString AppIntegration::normalizeShortcutDisplay(const QString &displayShortcut) {
@@ -358,14 +374,27 @@ QString AppIntegration::normalizeShortcutDisplay(const QString &displayShortcut)
 }
 
 bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut, QString *errorMessage) {
-    if (!isShortcutConfigAvailable()) {
+    const QString normalizedShortcut = normalizeShortcutDisplay(displayShortcut);
+    if (normalizedShortcut.isEmpty()) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("GNOME shortcut integration is not available on this system.");
+            *errorMessage = QStringLiteral("The shortcut format is invalid.");
         }
         return false;
     }
 
-    const QString normalizedShortcut = normalizeShortcutDisplay(displayShortcut);
+    AppSettings::setGlobalShortcut(normalizedShortcut);
+
+    if (PasteController::isX11Session()) {
+        return true;
+    }
+
+    if (!isGnomeShortcutBackendAvailable()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("Wayland global shortcuts need the GNOME extension schema to be installed and active.");
+        }
+        return false;
+    }
+
     const QString accelerator = displayShortcutToAccelerator(normalizedShortcut);
     if (accelerator.isEmpty()) {
         if (errorMessage) {

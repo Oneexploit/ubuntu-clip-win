@@ -24,13 +24,14 @@ Press `Ctrl + Alt + V`, browse recent clipboard items, restore one with the keyb
   - Configurable history limit
   - Clear-confirmation toggle
 - Environment-aware behavior
+  - On Linux/X11, the app listens for the global shortcut directly
   - On X11 with `xdotool`, `Enter` restores and pastes directly
   - On Wayland, `Enter` restores the clipboard item and tells you to paste with `Ctrl+V`
 - Settings dialog for
   - Persistence
   - History size
   - Autostart
-  - GNOME shortcut editing when the extension schema is available
+  - Global shortcut editing on Linux
 
 ## Shortcut
 
@@ -140,7 +141,7 @@ Only text history is stored in this build. Files and images are ignored.
 
 ## GNOME Shortcut
 
-The repository includes a GNOME Shell extension that binds `Ctrl + Alt + V`.
+The repository includes a GNOME Shell extension that binds `Ctrl + Alt + V` for Wayland sessions.
 
 Manual install:
 
@@ -160,6 +161,7 @@ sudo cmake --install build
 
 ## Notes About Wayland and X11
 
+- Linux/X11 uses the app's built-in global shortcut listener
 - GNOME/Wayland uses the extension for the global shortcut
 - X11 can use `xdotool` for automatic paste
 - Wayland usually blocks simulated key injection for security reasons, so the app falls back to "restore clipboard, then paste manually"

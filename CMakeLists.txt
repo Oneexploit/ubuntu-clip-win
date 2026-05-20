@@ -18,6 +18,9 @@ include(GNUInstallDirs)
 include(CTest)
 
 find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Widgets Sql Network)
+if(UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED)
+endif()
 
 add_executable(ubuntu-clip-win
     assets/assets.qrc
@@ -31,6 +34,8 @@ add_executable(ubuntu-clip-win
     src/ClipItem.h
     src/ClipboardStore.h
     src/ClipboardStore.cpp
+    src/LinuxHotkeyManager.h
+    src/LinuxHotkeyManager.cpp
     src/PasteController.h
     src/PasteController.cpp
     src/PopupWindow.h
@@ -49,6 +54,9 @@ target_link_libraries(ubuntu-clip-win
         Qt6::Sql
         Qt6::Network
 )
+if(UNIX AND NOT APPLE)
+    target_link_libraries(ubuntu-clip-win PRIVATE X11::X11)
+endif()
 
 target_compile_options(ubuntu-clip-win PRIVATE
     $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
@@ -115,7 +123,6 @@ if(BUILD_TESTING)
             Qt6::Test
             Qt6::Widgets
     )
-
     target_compile_options(ubuntu-clip-win-test-clipboardstore PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     )
@@ -125,6 +132,8 @@ if(BUILD_TESTING)
     add_executable(ubuntu-clip-win-test-appintegration
         src/AppIntegration.h
         src/AppIntegration.cpp
+        src/AppSettings.h
+        src/AppSettings.cpp
         src/PasteController.h
         src/PasteController.cpp
         tests/test_appintegration.cpp
@@ -133,9 +142,9 @@ if(BUILD_TESTING)
     target_link_libraries(ubuntu-clip-win-test-appintegration
         PRIVATE
             Qt6::Core
+            Qt6::Gui
             Qt6::Test
     )
-
     target_compile_options(ubuntu-clip-win-test-appintegration PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     )

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QString>
+
 class AppSettings {
 public:
     static bool persistentHistory();
@@ -16,4 +18,7 @@ public:
 
     static bool startupDiagnosticsShown();
     static void setStartupDiagnosticsShown(bool shown);
+
+    static QString globalShortcut();
+    static void setGlobalShortcut(const QString &shortcutDisplay);
 };

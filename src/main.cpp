@@ -1,6 +1,7 @@
 #include "AppIntegration.h"
 #include "AppSettings.h"
 #include "ClipboardStore.h"
+#include "LinuxHotkeyManager.h"
 #include "PasteController.h"
 #include "PopupWindow.h"
 #include "SettingsDialog.h"
@@ -123,16 +124,27 @@ int main(int argc, char *argv[]) {
     };
 
     std::unique_ptr<PopupWindow> popup;
+    std::unique_ptr<LinuxHotkeyManager> hotkeyManager;
     auto openSettings = [&]() {
         SettingsDialog dialog(popup ? popup.get() : nullptr);
+        bool settingsApplied = false;
         QObject::connect(&dialog, &SettingsDialog::settingsApplied, &app, [&]() {
+            settingsApplied = true;
             store.reloadSettings();
+            if (hotkeyManager) {
+                QString shortcutError;
+                if (!hotkeyManager->reloadShortcut(&shortcutError) && !shortcutError.trimmed().isEmpty()) {
+                    notify(QStringLiteral("Clipboard History"), shortcutError, true);
+                }
+            }
             if (popup) {
                 popup->refreshItems();
             }
         });
         dialog.exec();
-        store.reloadSettings();
+        if (!settingsApplied) {
+            store.reloadSettings();
+        }
         if (popup) {
             popup->refreshItems();
         }
@@ -175,6 +187,20 @@ int main(int argc, char *argv[]) {
     QObject::connect(&store, &ClipboardStore::errorOccurred, &app, [&](const QString &message) {
         notify(QStringLiteral("Clipboard History"), message, true);
     });
+
+    if (PasteController::isX11Session()) {
+        hotkeyManager = std::make_unique<LinuxHotkeyManager>(&app);
+        QObject::connect(hotkeyManager.get(), &LinuxHotkeyManager::activated, &app, [&]() {
+            ensurePopup()->showPopup();
+        });
+
+        QString hotkeyError;
+        if (!hotkeyManager->start(&hotkeyError) && !hotkeyError.trimmed().isEmpty()) {
+            QTimer::singleShot(1000, &app, [&, hotkeyError]() {
+                notify(QStringLiteral("Clipboard History"), hotkeyError, true);
+            });
+        }
+    }
 
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
         tray = new QSystemTrayIcon(appIcon(), &app);
