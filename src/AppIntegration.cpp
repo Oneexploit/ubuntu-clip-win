@@ -70,6 +70,123 @@ QString defaultShortcutDisplay() {
     return QStringLiteral("Ctrl+Super+V");
 }
 
+QString normalizeKeyToken(QString token) {
+    token = token.trimmed();
+    if (token.isEmpty()) {
+        return {};
+    }
+
+    if (token.compare(QStringLiteral("ctrl"), Qt::CaseInsensitive) == 0
+        || token.compare(QStringLiteral("control"), Qt::CaseInsensitive) == 0
+        || token.compare(QStringLiteral("primary"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("Ctrl");
+    }
+    if (token.compare(QStringLiteral("alt"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("Alt");
+    }
+    if (token.compare(QStringLiteral("shift"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("Shift");
+    }
+    if (token.compare(QStringLiteral("meta"), Qt::CaseInsensitive) == 0
+        || token.compare(QStringLiteral("super"), Qt::CaseInsensitive) == 0
+        || token.compare(QStringLiteral("win"), Qt::CaseInsensitive) == 0
+        || token.compare(QStringLiteral("windows"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("Super");
+    }
+    if (token.compare(QStringLiteral("esc"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("Escape");
+    }
+    if (token.compare(QStringLiteral("del"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("Delete");
+    }
+    if (token.compare(QStringLiteral("ins"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("Insert");
+    }
+    if (token.compare(QStringLiteral("pgup"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("PageUp");
+    }
+    if (token.compare(QStringLiteral("pgdown"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("PageDown");
+    }
+    if (token.size() == 1) {
+        return token.toUpper();
+    }
+    if (token.startsWith(QLatin1Char('F')) && token.size() > 1) {
+        bool ok = false;
+        token.mid(1).toInt(&ok);
+        if (ok) {
+            return token.toUpper();
+        }
+    }
+
+    return token.left(1).toUpper() + token.mid(1);
+}
+
+QString canonicalizeDisplayShortcut(QString displayShortcut) {
+    displayShortcut = displayShortcut.trimmed();
+    if (displayShortcut.isEmpty()) {
+        return {};
+    }
+
+    QStringList parts = displayShortcut.split(QLatin1Char('+'), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) {
+        return {};
+    }
+
+    bool hasCtrl = false;
+    bool hasAlt = false;
+    bool hasShift = false;
+    bool hasSuper = false;
+    QString keyToken;
+
+    for (QString part : parts) {
+        const QString token = normalizeKeyToken(part);
+        if (token.isEmpty()) {
+            return {};
+        }
+        if (token == QStringLiteral("Ctrl")) {
+            hasCtrl = true;
+            continue;
+        }
+        if (token == QStringLiteral("Alt")) {
+            hasAlt = true;
+            continue;
+        }
+        if (token == QStringLiteral("Shift")) {
+            hasShift = true;
+            continue;
+        }
+        if (token == QStringLiteral("Super")) {
+            hasSuper = true;
+            continue;
+        }
+        if (!keyToken.isEmpty()) {
+            return {};
+        }
+        keyToken = token;
+    }
+
+    if (keyToken.isEmpty()) {
+        return {};
+    }
+
+    QStringList ordered;
+    if (hasCtrl) {
+        ordered << QStringLiteral("Ctrl");
+    }
+    if (hasAlt) {
+        ordered << QStringLiteral("Alt");
+    }
+    if (hasShift) {
+        ordered << QStringLiteral("Shift");
+    }
+    if (hasSuper) {
+        ordered << QStringLiteral("Super");
+    }
+    ordered << keyToken;
+    return ordered.join(QLatin1Char('+'));
+}
+
 QString shortcutValueToDisplay(QString rawValue) {
     rawValue.remove(QLatin1Char('['));
     rawValue.remove(QLatin1Char(']'));
@@ -88,33 +205,11 @@ QString shortcutValueToDisplay(QString rawValue) {
     rawValue.replace(QStringLiteral("<Alt>"), QStringLiteral("Alt+"), Qt::CaseInsensitive);
     rawValue.replace(QStringLiteral("<Shift>"), QStringLiteral("Shift+"), Qt::CaseInsensitive);
     rawValue.replace(QStringLiteral("++"), QStringLiteral("+"));
-
-    QStringList parts = rawValue.split(QLatin1Char('+'), Qt::SkipEmptyParts);
-    if (parts.isEmpty()) {
-        return defaultShortcutDisplay();
-    }
-
-    for (QString &part : parts) {
-        if (part.compare(QStringLiteral("ctrl"), Qt::CaseInsensitive) == 0) {
-            part = QStringLiteral("Ctrl");
-        } else if (part.compare(QStringLiteral("alt"), Qt::CaseInsensitive) == 0) {
-            part = QStringLiteral("Alt");
-        } else if (part.compare(QStringLiteral("shift"), Qt::CaseInsensitive) == 0) {
-            part = QStringLiteral("Shift");
-        } else if (part.compare(QStringLiteral("super"), Qt::CaseInsensitive) == 0
-                   || part.compare(QStringLiteral("meta"), Qt::CaseInsensitive) == 0
-                   || part.compare(QStringLiteral("win"), Qt::CaseInsensitive) == 0) {
-            part = QStringLiteral("Super");
-        } else if (part.size() == 1) {
-            part = part.toUpper();
-        }
-    }
-
-    return parts.join(QLatin1Char('+'));
+    return canonicalizeDisplayShortcut(rawValue);
 }
 
 QString displayShortcutToAccelerator(QString displayShortcut) {
-    displayShortcut = displayShortcut.trimmed();
+    displayShortcut = canonicalizeDisplayShortcut(displayShortcut);
     if (displayShortcut.isEmpty()) {
         return {};
     }
@@ -227,7 +322,24 @@ QString AppIntegration::configuredShortcutDisplay() {
                                    QString::fromLatin1(kShortcutKey)
                                },
                                &output);
-    return ok ? shortcutValueToDisplay(output) : defaultShortcutDisplay();
+    const QString shortcut = ok ? shortcutValueToDisplay(output) : QString();
+    return shortcut.isEmpty() ? defaultShortcutDisplay() : shortcut;
+}
+
+QString AppIntegration::normalizeShortcutDisplay(const QString &displayShortcut) {
+    QString normalized = displayShortcut.trimmed();
+    if (normalized.isEmpty()) {
+        return {};
+    }
+
+    if (normalized.contains(QLatin1Char(','))) {
+        normalized = normalized.section(QLatin1Char(','), 0, 0).trimmed();
+    }
+    if (normalized.contains(QLatin1Char('<')) || normalized.contains(QLatin1Char('['))) {
+        return shortcutValueToDisplay(normalized);
+    }
+
+    return canonicalizeDisplayShortcut(normalized);
 }
 
 bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut, QString *errorMessage) {
@@ -238,7 +350,8 @@ bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut
         return false;
     }
 
-    const QString accelerator = displayShortcutToAccelerator(displayShortcut);
+    const QString normalizedShortcut = normalizeShortcutDisplay(displayShortcut);
+    const QString accelerator = displayShortcutToAccelerator(normalizedShortcut);
     if (accelerator.isEmpty()) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("The shortcut format is invalid.");

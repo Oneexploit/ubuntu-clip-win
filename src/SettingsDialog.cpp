@@ -92,7 +92,7 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     shortcutHint_ = new QLabel(integrationGroup);
     shortcutHint_->setWordWrap(true);
     if (AppIntegration::isShortcutConfigAvailable()) {
-        shortcutHint_->setText(QStringLiteral("This updates the GNOME Shell extension shortcut. Other desktop environments still open the app manually."));
+        shortcutHint_->setText(QStringLiteral("Press a single combination such as Ctrl+Super+V. This updates the GNOME Shell extension shortcut."));
     } else {
         shortcutHint_->setText(QStringLiteral("Shortcut editing is unavailable because the GNOME extension schema could not be found from this app."));
     }
@@ -110,15 +110,20 @@ void SettingsDialog::accept() {
     QString errorMessage;
     const bool autostartChanged = autostart_->isChecked() != autostartWasEnabled_;
     const bool shortcutAvailable = AppIntegration::isShortcutConfigAvailable();
-    const QString shortcutText = shortcutAvailable
-        ? shortcutEdit_->keySequence().toString(QKeySequence::PortableText)
-        : QString();
-    const bool shortcutChanged = shortcutAvailable && shortcutText != shortcutForEditor(shortcutDisplayAtLoad_);
+    QString shortcutText;
+    if (shortcutAvailable) {
+        shortcutText = AppIntegration::normalizeShortcutDisplay(shortcutEdit_->keySequence().toString(QKeySequence::PortableText));
+        if (shortcutText.isEmpty()) {
+            shortcutText = AppIntegration::normalizeShortcutDisplay(shortcutEdit_->keySequence().toString(QKeySequence::NativeText));
+        }
+    }
+    const QString originalShortcut = AppIntegration::normalizeShortcutDisplay(shortcutDisplayAtLoad_);
+    const bool shortcutChanged = shortcutAvailable && shortcutText != originalShortcut;
 
     if (shortcutAvailable && shortcutText.isEmpty()) {
         QMessageBox::warning(this,
                              QStringLiteral("Clipboard Settings"),
-                             QStringLiteral("Please enter a shortcut before saving."));
+                             QStringLiteral("Please press one valid shortcut combination before saving."));
         return;
     }
 
@@ -133,7 +138,7 @@ void SettingsDialog::accept() {
         if (!AppIntegration::setAutostartEnabled(autostart_->isChecked(), &errorMessage)) {
             if (shortcutChanged) {
                 QString rollbackError;
-                AppIntegration::setConfiguredShortcutDisplay(shortcutDisplayAtLoad_, &rollbackError);
+                AppIntegration::setConfiguredShortcutDisplay(originalShortcut, &rollbackError);
             }
             QMessageBox::warning(this, QStringLiteral("Clipboard Settings"), errorMessage);
             return;

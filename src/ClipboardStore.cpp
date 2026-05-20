@@ -12,6 +12,7 @@
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QHash>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -22,6 +23,49 @@
 
 namespace {
 constexpr int kMaxSearchableTextChars = 256 * 1024;
+
+QString nonNullString(const QString &value) {
+    return value.isNull() ? QStringLiteral("") : value;
+}
+
+QString normalizedStoredText(QString text) {
+    return ClipMime::normalizedText(nonNullString(text)).left(kMaxSearchableTextChars);
+}
+
+QString textFromMimeBundle(const QByteArray &bundle) {
+    if (bundle.isEmpty()) {
+        return {};
+    }
+
+    const QMap<QString, QByteArray> formats = ClipMime::deserializeMimeBundle(bundle);
+    QString text = ClipMime::normalizedText(QString::fromUtf8(formats.value(QStringLiteral("text/plain"))));
+    if (!text.trimmed().isEmpty()) {
+        return text;
+    }
+
+    const QString html = QString::fromUtf8(formats.value(QStringLiteral("text/html")));
+    if (!html.trimmed().isEmpty()) {
+        return ClipMime::plainTextFromHtml(html);
+    }
+
+    return {};
+}
+
+QString textOnlyValue(QString text, const QString &html, const QByteArray &mimeBundle) {
+    text = normalizedStoredText(std::move(text));
+    if (!text.trimmed().isEmpty()) {
+        return text;
+    }
+
+    if (!html.trimmed().isEmpty()) {
+        text = ClipMime::plainTextFromHtml(html);
+    }
+    if (!text.trimmed().isEmpty()) {
+        return normalizedStoredText(std::move(text));
+    }
+
+    return normalizedStoredText(textFromMimeBundle(mimeBundle));
+}
 } // namespace
 
 ClipboardStore::ClipboardStore(QObject *parent)
@@ -58,6 +102,9 @@ bool ClipboardStore::open() {
     pragmas.exec(QStringLiteral("PRAGMA temp_store=MEMORY"));
 
     if (!ensureSchema()) {
+        return false;
+    }
+    if (!normalizeExistingRowsToTextOnly()) {
         return false;
     }
 
@@ -160,23 +207,19 @@ bool ClipboardStore::migrateLegacySchemaIfNeeded() {
         item.pinned = readLegacy.value(1).toInt() != 0;
         item.createdAt = QDateTime::fromString(readLegacy.value(2).toString(), Qt::ISODateWithMs);
         item.updatedAt = QDateTime::fromString(readLegacy.value(3).toString(), Qt::ISODateWithMs);
-        item.mimeBundle = ClipMime::serializeMimeBundle({{QStringLiteral("text/plain"), item.text.toUtf8()}});
         item.hash = hashFor(item);
 
         QSqlQuery insert(db_);
         insert.prepare(QStringLiteral(R"SQL(
-            INSERT INTO clips(kind, text, html, pinned, created_at, updated_at, hash, mime_bundle, image_png)
-            VALUES(:kind, :text, :html, :pinned, :created_at, :updated_at, :hash, :mime_bundle, :image_png)
+            INSERT INTO clips(kind, text, pinned, created_at, updated_at, hash)
+            VALUES(:kind, :text, :pinned, :created_at, :updated_at, :hash)
         )SQL"));
         insert.bindValue(QStringLiteral(":kind"), item.kind);
         insert.bindValue(QStringLiteral(":text"), item.text);
-        insert.bindValue(QStringLiteral(":html"), item.html);
         insert.bindValue(QStringLiteral(":pinned"), item.pinned ? 1 : 0);
         insert.bindValue(QStringLiteral(":created_at"), item.createdAt.isValid() ? item.createdAt.toString(Qt::ISODateWithMs) : nowIso());
         insert.bindValue(QStringLiteral(":updated_at"), item.updatedAt.isValid() ? item.updatedAt.toString(Qt::ISODateWithMs) : nowIso());
         insert.bindValue(QStringLiteral(":hash"), item.hash);
-        insert.bindValue(QStringLiteral(":mime_bundle"), item.mimeBundle);
-        insert.bindValue(QStringLiteral(":image_png"), item.imagePng);
         if (!insert.exec()) {
             emit errorOccurred(QStringLiteral("Cannot migrate a clipboard item: %1").arg(insert.lastError().text()));
         }
@@ -203,15 +246,9 @@ QString ClipboardStore::nowIso() const {
 
 QString ClipboardStore::hashFor(const ClipItem &item) const {
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    hash.addData(item.kind.toUtf8());
+    hash.addData(nonNullString(item.kind).toUtf8());
     hash.addData(QByteArrayView("\0", 1));
-    hash.addData(item.text.toUtf8());
-    hash.addData(QByteArrayView("\0", 1));
-    hash.addData(item.html.toUtf8());
-    hash.addData(QByteArrayView("\0", 1));
-    hash.addData(item.mimeBundle);
-    hash.addData(QByteArrayView("\0", 1));
-    hash.addData(item.imagePng);
+    hash.addData(nonNullString(item.text).toUtf8());
     return QString::fromLatin1(hash.result().toHex());
 }
 
@@ -259,12 +296,11 @@ bool ClipboardStore::captureMimeData(const QMimeData *mime, QClipboard::Mode mod
     }
 
     ClipItem item;
-    item.kind = payload->kind;
-    item.text = ClipMime::normalizedText(payload->text).left(kMaxSearchableTextChars);
-    item.html = payload->html;
-    item.urls = payload->urls;
-    item.imagePng = payload->imagePng;
-    item.mimeBundle = payload->mimeBundle;
+    item.kind = QStringLiteral("text");
+    item.text = normalizedStoredText(payload->text);
+    if (item.text.trimmed().isEmpty()) {
+        return false;
+    }
     item.hash = hashFor(item);
 
     if (item.hash == lastCapturedHash_) {
@@ -290,18 +326,12 @@ void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
             UPDATE clips
             SET kind = :kind,
                 text = :text,
-                html = :html,
-                updated_at = :updated_at,
-                mime_bundle = :mime_bundle,
-                image_png = :image_png
+                updated_at = :updated_at
             WHERE hash = :hash
         )SQL"));
         update.bindValue(QStringLiteral(":kind"), item.kind);
         update.bindValue(QStringLiteral(":text"), item.text);
-        update.bindValue(QStringLiteral(":html"), item.html);
         update.bindValue(QStringLiteral(":updated_at"), now);
-        update.bindValue(QStringLiteral(":mime_bundle"), item.mimeBundle);
-        update.bindValue(QStringLiteral(":image_png"), item.imagePng);
         update.bindValue(QStringLiteral(":hash"), item.hash);
         if (!update.exec()) {
             emit errorOccurred(QStringLiteral("Cannot update clipboard item: %1").arg(update.lastError().text()));
@@ -311,20 +341,126 @@ void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
 
     QSqlQuery insert(db_);
     insert.prepare(QStringLiteral(R"SQL(
-        INSERT INTO clips(kind, text, html, pinned, created_at, updated_at, hash, mime_bundle, image_png)
-        VALUES(:kind, :text, :html, 0, :created_at, :updated_at, :hash, :mime_bundle, :image_png)
+        INSERT INTO clips(kind, text, pinned, created_at, updated_at, hash)
+        VALUES(:kind, :text, 0, :created_at, :updated_at, :hash)
     )SQL"));
     insert.bindValue(QStringLiteral(":kind"), item.kind);
     insert.bindValue(QStringLiteral(":text"), item.text);
-    insert.bindValue(QStringLiteral(":html"), item.html);
     insert.bindValue(QStringLiteral(":created_at"), now);
     insert.bindValue(QStringLiteral(":updated_at"), now);
     insert.bindValue(QStringLiteral(":hash"), item.hash);
-    insert.bindValue(QStringLiteral(":mime_bundle"), item.mimeBundle);
-    insert.bindValue(QStringLiteral(":image_png"), item.imagePng);
     if (!insert.exec()) {
         emit errorOccurred(QStringLiteral("Cannot insert clipboard item: %1").arg(insert.lastError().text()));
     }
+}
+
+bool ClipboardStore::normalizeExistingRowsToTextOnly() {
+    QSqlQuery needsRewrite(db_);
+    if (!needsRewrite.exec(QStringLiteral(R"SQL(
+        SELECT COUNT(*)
+        FROM clips
+        WHERE kind IS NULL
+           OR lower(kind) <> 'text'
+           OR text IS NULL
+           OR html IS NULL
+           OR COALESCE(html, '') <> ''
+           OR mime_bundle IS NULL
+           OR length(mime_bundle) > 0
+           OR image_png IS NULL
+           OR length(image_png) > 0
+    )SQL"))) {
+        emit errorOccurred(QStringLiteral("Cannot inspect clipboard items: %1").arg(needsRewrite.lastError().text()));
+        return false;
+    }
+
+    if (!needsRewrite.next() || needsRewrite.value(0).toInt() == 0) {
+        return true;
+    }
+
+    QSqlQuery read(db_);
+    if (!read.exec(QStringLiteral(R"SQL(
+        SELECT id, kind, text, html, pinned, created_at, updated_at, hash, mime_bundle, image_png
+        FROM clips
+        ORDER BY updated_at ASC, id ASC
+    )SQL"))) {
+        emit errorOccurred(QStringLiteral("Cannot normalize clipboard history: %1").arg(read.lastError().text()));
+        return false;
+    }
+
+    QList<ClipItem> normalizedItems;
+    QHash<QString, int> indexByHash;
+    while (read.next()) {
+        ClipItem item;
+        item.text = textOnlyValue(read.value(2).toString(),
+                                  nonNullString(read.value(3).toString()),
+                                  read.value(8).toByteArray());
+        if (item.text.trimmed().isEmpty()) {
+            continue;
+        }
+
+        item.kind = QStringLiteral("text");
+        item.pinned = read.value(4).toInt() != 0;
+        item.createdAt = QDateTime::fromString(read.value(5).toString(), Qt::ISODateWithMs);
+        item.updatedAt = QDateTime::fromString(read.value(6).toString(), Qt::ISODateWithMs);
+        item.hash = hashFor(item);
+
+        const auto existingIt = indexByHash.constFind(item.hash);
+        if (existingIt != indexByHash.cend()) {
+            ClipItem &existing = normalizedItems[existingIt.value()];
+            existing.pinned = existing.pinned || item.pinned;
+            if (item.createdAt.isValid() && (!existing.createdAt.isValid() || item.createdAt < existing.createdAt)) {
+                existing.createdAt = item.createdAt;
+            }
+            if (item.updatedAt.isValid() && (!existing.updatedAt.isValid() || item.updatedAt > existing.updatedAt)) {
+                existing.updatedAt = item.updatedAt;
+            }
+            continue;
+        }
+
+        indexByHash.insert(item.hash, normalizedItems.size());
+        normalizedItems << item;
+    }
+
+    if (!db_.transaction()) {
+        emit errorOccurred(QStringLiteral("Cannot start clipboard cleanup transaction: %1").arg(db_.lastError().text()));
+        return false;
+    }
+
+    QSqlQuery clear(db_);
+    if (!clear.exec(QStringLiteral("DELETE FROM clips"))) {
+        db_.rollback();
+        emit errorOccurred(QStringLiteral("Cannot rewrite clipboard history: %1").arg(clear.lastError().text()));
+        return false;
+    }
+
+    QSqlQuery insert(db_);
+    insert.prepare(QStringLiteral(R"SQL(
+        INSERT INTO clips(kind, text, pinned, created_at, updated_at, hash)
+        VALUES(:kind, :text, :pinned, :created_at, :updated_at, :hash)
+    )SQL"));
+
+    for (const ClipItem &item : normalizedItems) {
+        insert.bindValue(QStringLiteral(":kind"), item.kind);
+        insert.bindValue(QStringLiteral(":text"), item.text);
+        insert.bindValue(QStringLiteral(":pinned"), item.pinned ? 1 : 0);
+        insert.bindValue(QStringLiteral(":created_at"), item.createdAt.isValid() ? item.createdAt.toString(Qt::ISODateWithMs) : nowIso());
+        insert.bindValue(QStringLiteral(":updated_at"), item.updatedAt.isValid() ? item.updatedAt.toString(Qt::ISODateWithMs) : nowIso());
+        insert.bindValue(QStringLiteral(":hash"), item.hash);
+        if (!insert.exec()) {
+            db_.rollback();
+            emit errorOccurred(QStringLiteral("Cannot save normalized clipboard item: %1").arg(insert.lastError().text()));
+            return false;
+        }
+    }
+
+    if (!db_.commit()) {
+        db_.rollback();
+        emit errorOccurred(QStringLiteral("Cannot finish clipboard cleanup: %1").arg(db_.lastError().text()));
+        return false;
+    }
+
+    lastCapturedHash_.clear();
+    return true;
 }
 
 void ClipboardStore::applyStartupRetentionPolicy() {
@@ -415,21 +551,20 @@ std::optional<ClipItem> ClipboardStore::itemById(int id) const {
 ClipItem ClipboardStore::readItemFromQuery(const QSqlQuery &query) const {
     ClipItem item;
     item.id = query.value(0).toInt();
-    item.kind = query.value(1).toString();
-    item.text = query.value(2).toString();
-    item.html = query.value(3).toString();
+    item.kind = nonNullString(query.value(1).toString());
+    if (item.kind.trimmed().isEmpty()) {
+        item.kind = QStringLiteral("text");
+    }
+    item.text = normalizedStoredText(query.value(2).toString());
     item.pinned = query.value(4).toInt() != 0;
     item.createdAt = QDateTime::fromString(query.value(5).toString(), Qt::ISODateWithMs);
     item.updatedAt = QDateTime::fromString(query.value(6).toString(), Qt::ISODateWithMs);
     item.hash = query.value(7).toString();
-    item.mimeBundle = query.value(8).toByteArray();
-    item.imagePng = query.value(9).toByteArray();
-    item.urls = ClipMime::urlsFromMimeBundle(item.mimeBundle);
     return item;
 }
 
 bool ClipboardStore::copyToClipboard(const ClipItem &item) {
-    if (!item.isValid() || (item.text.isEmpty() && item.mimeBundle.isEmpty() && item.imagePng.isEmpty())) {
+    if (!item.isValid() || item.text.trimmed().isEmpty()) {
         return false;
     }
 
@@ -441,15 +576,7 @@ bool ClipboardStore::copyToClipboard(const ClipItem &item) {
     suppressCapture_ = true;
     lastCapturedHash_ = item.hash;
 
-    ClipPayload payload;
-    payload.kind = item.kind;
-    payload.text = item.text;
-    payload.html = item.html;
-    payload.urls = item.urls;
-    payload.imagePng = item.imagePng;
-    payload.mimeBundle = item.mimeBundle;
-
-    clipboard->setMimeData(ClipMime::mimeDataFromPayload(payload), QClipboard::Clipboard);
+    clipboard->setText(item.text, QClipboard::Clipboard);
 
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 

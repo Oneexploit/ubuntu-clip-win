@@ -41,15 +41,7 @@ QString pluralizedItems(int count) {
 }
 
 QString iconLabelForItem(const ClipItem &item) {
-    if (item.hasImage()) {
-        return QStringLiteral("IMG");
-    }
-    if (item.hasFiles()) {
-        return QStringLiteral("FILE");
-    }
-    if (item.hasHtml()) {
-        return QStringLiteral("HTML");
-    }
+    Q_UNUSED(item);
     return QStringLiteral("TXT");
 }
 
@@ -130,7 +122,7 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
 
     search_ = new QLineEdit(panel_);
     search_->setObjectName(QStringLiteral("searchBox"));
-    search_->setPlaceholderText(QStringLiteral("Search clipboard history"));
+    search_->setPlaceholderText(QStringLiteral("Search copied text"));
     search_->setClearButtonEnabled(true);
     search_->setMinimumHeight(38);
     search_->installEventFilter(this);
@@ -487,7 +479,7 @@ void PopupWindow::refreshItems() {
     for (const ClipItem &item : items) {
         auto *row = new QListWidgetItem();
         row->setData(Qt::UserRole, item.id);
-        row->setSizeHint(QSize(qMax(320, list_->viewport()->width() - 8), item.hasImage() ? 96 : 84));
+        row->setSizeHint(QSize(qMax(320, list_->viewport()->width() - 8), 84));
         row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         list_->addItem(row);
         list_->setItemWidget(row, createItemWidget(item));
@@ -521,17 +513,9 @@ QWidget *PopupWindow::createItemWidget(const ClipItem &item) {
     auto *visual = new QLabel(card);
     visual->setObjectName(QStringLiteral("clipIcon"));
     visual->setAlignment(Qt::AlignCenter);
-    visual->setFixedSize(item.hasImage() ? QSize(56, 56) : QSize(48, 48));
+    visual->setFixedSize(QSize(48, 48));
     visual->setAttribute(Qt::WA_TransparentForMouseEvents);
-
-    if (item.hasImage()) {
-        QPixmap preview;
-        preview.loadFromData(item.imagePng, "PNG");
-        visual->setPixmap(preview.scaled(56, 56, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
-        visual->setScaledContents(true);
-    } else {
-        visual->setText(iconLabelForItem(item));
-    }
+    visual->setText(iconLabelForItem(item));
     layout->addWidget(visual);
 
     auto *textLayout = new QVBoxLayout();
@@ -554,7 +538,7 @@ QWidget *PopupWindow::createItemWidget(const ClipItem &item) {
     auto *preview = new QLabel(item.previewText(), card);
     preview->setObjectName(QStringLiteral("clipPreview"));
     preview->setWordWrap(true);
-    preview->setMaximumHeight(item.hasImage() ? 54 : 42);
+    preview->setMaximumHeight(42);
     preview->setAttribute(Qt::WA_TransparentForMouseEvents);
     textLayout->addWidget(preview);
     layout->addLayout(textLayout, 1);
@@ -628,7 +612,7 @@ QString PopupWindow::emptyStateText(bool searchIsActive) const {
 
     return QStringLiteral(
         "<div style='font-size:15px; color:#ffffff;'>Your clipboard history is empty</div>"
-        "<div style='margin-top:6px;'>Copy text, code, rich text, images, or files. Then press <b>%1</b>.</div>")
+        "<div style='margin-top:6px;'>Copy text in any app, then press <b>%1</b>.</div>")
         .arg(AppIntegration::configuredShortcutDisplay());
 }
 

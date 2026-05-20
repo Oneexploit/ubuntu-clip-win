@@ -77,7 +77,26 @@ include(CPack)
 if(BUILD_TESTING)
     find_package(Qt6 6.2 REQUIRED COMPONENTS Test)
 
-    add_executable(ubuntu-clip-win-tests
+    add_executable(ubuntu-clip-win-test-clipmime
+        src/ClipMime.h
+        src/ClipMime.cpp
+        tests/test_clipmime.cpp
+    )
+
+    target_link_libraries(ubuntu-clip-win-test-clipmime
+        PRIVATE
+            Qt6::Core
+            Qt6::Gui
+            Qt6::Test
+    )
+
+    target_compile_options(ubuntu-clip-win-test-clipmime PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    )
+
+    add_test(NAME ubuntu-clip-win-test-clipmime COMMAND ubuntu-clip-win-test-clipmime)
+
+    add_executable(ubuntu-clip-win-test-clipboardstore
         src/AppSettings.h
         src/AppSettings.cpp
         src/ClipMime.h
@@ -85,11 +104,10 @@ if(BUILD_TESTING)
         src/ClipItem.h
         src/ClipboardStore.h
         src/ClipboardStore.cpp
-        tests/test_clipmime.cpp
         tests/test_clipboardstore.cpp
     )
 
-    target_link_libraries(ubuntu-clip-win-tests
+    target_link_libraries(ubuntu-clip-win-test-clipboardstore
         PRIVATE
             Qt6::Core
             Qt6::Gui
@@ -98,9 +116,29 @@ if(BUILD_TESTING)
             Qt6::Widgets
     )
 
-    target_compile_options(ubuntu-clip-win-tests PRIVATE
+    target_compile_options(ubuntu-clip-win-test-clipboardstore PRIVATE
         $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
     )
 
-    add_test(NAME ubuntu-clip-win-tests COMMAND ubuntu-clip-win-tests)
+    add_test(NAME ubuntu-clip-win-test-clipboardstore COMMAND ubuntu-clip-win-test-clipboardstore)
+
+    add_executable(ubuntu-clip-win-test-appintegration
+        src/AppIntegration.h
+        src/AppIntegration.cpp
+        src/PasteController.h
+        src/PasteController.cpp
+        tests/test_appintegration.cpp
+    )
+
+    target_link_libraries(ubuntu-clip-win-test-appintegration
+        PRIVATE
+            Qt6::Core
+            Qt6::Test
+    )
+
+    target_compile_options(ubuntu-clip-win-test-appintegration PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic>
+    )
+
+    add_test(NAME ubuntu-clip-win-test-appintegration COMMAND ubuntu-clip-win-test-appintegration)
 endif()

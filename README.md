@@ -112,7 +112,7 @@ ubuntu-clip-win --settings
 
 ## Usage
 
-1. Copy text, code, rich text, an image, or a supported file selection.
+1. Copy text from any app. Rich text is stored as plain text.
 2. Press `Ctrl + Super + V`.
 3. Use `Up` / `Down` to choose an item.
 4. Press `Enter`.
@@ -139,6 +139,7 @@ Useful shortcuts inside the popup:
 - History size is configurable in Settings
 
 Clipboard data is stored locally in the app data directory so pinned items and optional persistent history can survive restarts.
+Only text history is stored in this build. Files and images are ignored.
 
 ## GNOME Shortcut
 
@@ -182,7 +183,7 @@ sudo cmake --install build
 
 - Better shortcut support outside GNOME
 - Broader desktop-environment integration
-- More preview polish for large images and file groups
+- More text-editing and search polish
 - Import/export of settings
 
 ## License

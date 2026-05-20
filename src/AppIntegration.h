@@ -10,6 +10,7 @@ public:
 
     static bool isShortcutConfigAvailable();
     static QString configuredShortcutDisplay();
+    static QString normalizeShortcutDisplay(const QString &displayShortcut);
     static bool setConfiguredShortcutDisplay(const QString &displayShortcut, QString *errorMessage = nullptr);
 
     static bool isAutostartEnabled();
