@@ -935,10 +935,6 @@ bool PopupWindow::watchedObjectCanStartDrag(QObject *watched) const {
         return false;
     }
 
-    if (widget->property("clipId").isValid()) {
-        return true;
-    }
-
     return widget->objectName() == QStringLiteral("title")
         || widget->objectName() == QStringLiteral("appLogo")
         || widget->objectName() == QStringLiteral("keyCap")
@@ -951,6 +947,28 @@ void PopupWindow::beginPossibleDrag(const QPoint &globalPos, int clipId) {
     pressedClipId_ = clipId;
     dragStartGlobal_ = globalPos;
     dragWindowStart_ = pos();
+}
+
+void PopupWindow::watchForDragRelease() {
+    if (dragReleaseWatchScheduled_) {
+        return;
+    }
+
+    dragReleaseWatchScheduled_ = true;
+    QTimer::singleShot(16, this, [this]() {
+        dragReleaseWatchScheduled_ = false;
+        if (!dragCandidate_ && !dragging_) {
+            return;
+        }
+
+        if (!QGuiApplication::mouseButtons().testFlag(Qt::LeftButton)) {
+            unsetCursor();
+            finishDrag();
+            return;
+        }
+
+        watchForDragRelease();
+    });
 }
 
 bool PopupWindow::tryStartSystemMove() {
@@ -1025,7 +1043,8 @@ bool PopupWindow::handleDragEvent(QObject *watched, QEvent *event) {
         }
 
         beginPossibleDrag(mouseEvent->globalPosition().toPoint(), clipId);
-        setCursor(Qt::OpenHandCursor);
+        setCursor(Qt::ClosedHandCursor);
+        watchForDragRelease();
 
         if (clipId < 0 && tryStartSystemMove()) {
             event->accept();
@@ -1061,8 +1080,8 @@ bool PopupWindow::handleDragEvent(QObject *watched, QEvent *event) {
             return false;
         }
         const bool wasDragging = dragging_;
-        unsetCursor();
         finishDrag();
+        unsetCursor();
         if (wasDragging) {
             event->accept();
             return true;
@@ -1118,4 +1137,10 @@ void PopupWindow::keyPressEvent(QKeyEvent *event) {
     }
 
     QWidget::keyPressEvent(event);
+}
+
+void PopupWindow::hideEvent(QHideEvent *event) {
+    finishDrag();
+    unsetCursor();
+    QWidget::hideEvent(event);
 }

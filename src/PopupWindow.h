@@ -12,6 +12,7 @@
 class QLabel;
 class QKeyEvent;
 class QEvent;
+class QHideEvent;
 class QObject;
 class QFrame;
 class QListWidgetItem;
@@ -34,6 +35,7 @@ signals:
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
@@ -58,6 +60,7 @@ private:
     bool handleDragEvent(QObject *watched, QEvent *event);
     bool watchedObjectCanStartDrag(QObject *watched) const;
     void beginPossibleDrag(const QPoint &globalPos, int clipId = -1);
+    void watchForDragRelease();
     bool tryStartSystemMove();
     bool updateDrag(const QPoint &globalPos);
     void finishDrag();
@@ -79,6 +82,7 @@ private:
     bool pasteInProgress_ = false;
     bool dragCandidate_ = false;
     bool dragging_ = false;
+    bool dragReleaseWatchScheduled_ = false;
     bool hasUserPosition_ = false;
     bool targetWindowProvided_ = false;
     int pressedClipId_ = -1;
