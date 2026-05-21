@@ -3,6 +3,7 @@
 #include "AppIntegration.h"
 #include "AppSettings.h"
 #include "PasteController.h"
+#include "RuntimeLog.h"
 
 #include <QAbstractAnimation>
 #include <QAbstractItemView>
@@ -52,6 +53,7 @@ bool isPlainLeftClick(const QMouseEvent *event) {
 
 PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
     : QWidget(parent), store_(store) {
+    RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("constructed"));
     setWindowTitle(QStringLiteral("Clipboard History"));
     setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
@@ -347,13 +349,29 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
         }
     )CSS"));
 
-    connect(closeButton, &QPushButton::clicked, this, &QWidget::hide);
-    connect(settingsButton_, &QPushButton::clicked, this, &PopupWindow::settingsRequested);
-    connect(clearButton_, &QPushButton::clicked, this, &PopupWindow::clearHistoryWithConfirmation);
-    connect(search_, &QLineEdit::textChanged, this, &PopupWindow::refreshItems);
+    connect(closeButton, &QPushButton::clicked, this, [this]() {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("close-button-clicked"));
+        hide();
+    });
+    connect(settingsButton_, &QPushButton::clicked, this, [this]() {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("settings-button-clicked"));
+        emit settingsRequested();
+    });
+    connect(clearButton_, &QPushButton::clicked, this, [this]() {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("clear-button-clicked"));
+        clearHistoryWithConfirmation();
+    });
+    connect(search_, &QLineEdit::textChanged, this, [this](const QString &text) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("search-text-changed text=%1").arg(text));
+        refreshItems();
+    });
     connect(list_, &QListWidget::itemActivated, this, &PopupWindow::activateListItem);
     connect(list_, &QListWidget::customContextMenuRequested, this, &PopupWindow::showItemMenu);
     connect(list_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem *, QListWidgetItem *) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"),
+                          QStringLiteral("current-item-changed id=%1 row=%2")
+                              .arg(list_ && list_->currentItem() ? list_->currentItem()->data(Qt::UserRole).toInt() : -1)
+                              .arg(list_ ? list_->currentRow() : -1));
         updateSelectionStyles();
         updateStatusForSelection();
     });
@@ -364,6 +382,7 @@ PopupWindow::PopupWindow(ClipboardStore *store, QWidget *parent)
 
 void PopupWindow::showPopupForWindow(const QString &targetWindowId) {
     const QString trimmed = targetWindowId.trimmed();
+    RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("show-popup-for-window targetWindowId=%1").arg(trimmed));
     if (!trimmed.isEmpty()) {
         previousActiveWindowId_ = trimmed;
         targetWindowProvided_ = true;
@@ -372,6 +391,7 @@ void PopupWindow::showPopupForWindow(const QString &targetWindowId) {
 }
 
 void PopupWindow::showPopup() {
+    const bool hadExplicitTargetWindow = targetWindowProvided_;
     if (targetWindowProvided_) {
         targetWindowProvided_ = false;
     } else {
@@ -379,6 +399,12 @@ void PopupWindow::showPopup() {
     }
     previousPointerGlobalPos_ = QCursor::pos();
     pasteInProgress_ = false;
+    RuntimeLog::write(QStringLiteral("PopupWindow"),
+                      QStringLiteral("show-popup targetWindowProvided=%1 previousActiveWindowId=%2 pointer=%3,%4")
+                          .arg(hadExplicitTargetWindow ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(previousActiveWindowId_)
+                          .arg(previousPointerGlobalPos_.x())
+                          .arg(previousPointerGlobalPos_.y()));
 
     if (search_) {
         search_->clear();
@@ -411,6 +437,7 @@ void PopupWindow::showPopup() {
     }
     updateSelectionStyles();
     updateStatusForSelection();
+    RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("show-popup completed itemCount=%1").arg(list_ ? list_->count() : 0));
 }
 
 QPoint PopupWindow::defaultPopupPosition() const {
@@ -492,6 +519,13 @@ void PopupWindow::refreshItems() {
     }
     updateSelectionStyles();
     updateStatusForSelection();
+    RuntimeLog::write(QStringLiteral("PopupWindow"),
+                      QStringLiteral("refresh-items query=%1 searchIsActive=%2 visibleItems=%3 hasAnyItems=%4 selectedRow=%5")
+                          .arg(query)
+                          .arg(searchIsActive ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(items.size())
+                          .arg(hasAnyItems ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(list_->currentRow()));
 }
 
 QWidget *PopupWindow::createItemWidget(const ClipItem &item) {
@@ -562,11 +596,13 @@ QWidget *PopupWindow::createItemWidget(const ClipItem &item) {
 
     connect(pin, &QPushButton::clicked, this, [this, id = item.id]() {
         if (store_) {
+            RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("pin-button-clicked id=%1").arg(id));
             store_->togglePinned(id);
         }
     });
     connect(remove, &QPushButton::clicked, this, [this, id = item.id]() {
         if (store_) {
+            RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("delete-button-clicked id=%1").arg(id));
             store_->deleteItem(id);
         }
     });
@@ -625,20 +661,41 @@ void PopupWindow::activateCurrentItem() {
 }
 
 void PopupWindow::activateById(int id, ActivationSource source) {
+    const auto sourceName = [source]() {
+        switch (source) {
+        case ActivationSource::Keyboard:
+            return QStringLiteral("keyboard");
+        case ActivationSource::Mouse:
+            return QStringLiteral("mouse");
+        case ActivationSource::Menu:
+            return QStringLiteral("menu");
+        }
+
+        return QStringLiteral("unknown");
+    }();
+
+    RuntimeLog::write(QStringLiteral("PopupWindow"),
+                      QStringLiteral("activate-by-id begin id=%1 source=%2 pasteInProgress=%3")
+                          .arg(id)
+                          .arg(sourceName)
+                          .arg(pasteInProgress_ ? QStringLiteral("true") : QStringLiteral("false")));
     if (!store_ || pasteInProgress_) {
         return;
     }
 
     const auto item = store_->itemById(id);
     if (!item.has_value()) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("activate-by-id missing-item id=%1").arg(id));
         return;
     }
 
     if (!store_->copyToClipboard(*item)) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("activate-by-id copy-to-clipboard-failed id=%1").arg(id));
         return;
     }
 
     if (!PasteController::canAutoPaste()) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("activate-by-id copied-only id=%1 source=%2").arg(id).arg(sourceName));
         hide();
         emit notificationRequested(QStringLiteral("Clipboard History"),
                                    QStringLiteral("Copied selected item. Press Ctrl+V in the target app."),
@@ -654,8 +711,19 @@ void PopupWindow::activateById(int id, ActivationSource source) {
     const QPoint targetPoint = previousPointerGlobalPos_;
     const bool strictMouseTarget = source == ActivationSource::Mouse;
     QTimer::singleShot(kPasteDelayMs, this, [this, targetWindowId, targetPoint, strictMouseTarget, source]() {
+        const QString sourceName = source == ActivationSource::Keyboard
+            ? QStringLiteral("keyboard")
+            : (source == ActivationSource::Mouse ? QStringLiteral("mouse") : QStringLiteral("menu"));
         const bool pasted = PasteController::tryPasteToWindow(targetWindowId, targetPoint, strictMouseTarget);
         pasteInProgress_ = false;
+        RuntimeLog::write(QStringLiteral("PopupWindow"),
+                          QStringLiteral("activate-by-id paste-finished source=%1 pasted=%2 targetWindowId=%3 point=%4,%5 strictMouseTarget=%6")
+                              .arg(sourceName)
+                              .arg(pasted ? QStringLiteral("true") : QStringLiteral("false"))
+                              .arg(targetWindowId)
+                              .arg(targetPoint.x())
+                              .arg(targetPoint.y())
+                              .arg(strictMouseTarget ? QStringLiteral("true") : QStringLiteral("false")));
         if (!pasted && source != ActivationSource::Mouse) {
             emit notificationRequested(QStringLiteral("Clipboard History"),
                                        QStringLiteral("The item was copied, but auto-paste was unavailable. Press Ctrl+V in the target app."),
@@ -687,6 +755,7 @@ void PopupWindow::setSelectedItemToClipboardOnly() {
     }
 
     if (store_->copyToClipboard(*item)) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("copy-only selected id=%1").arg(id));
         statusLabel_->setText(QStringLiteral("Copied selected item. Paste it with Ctrl+V."));
     }
 }
@@ -714,16 +783,21 @@ void PopupWindow::showItemMenu(const QPoint &pos) {
 
     QAction *chosen = menu.exec(list_->viewport()->mapToGlobal(pos));
     if (!chosen) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("item-menu dismissed id=%1").arg(id));
         return;
     }
 
     if (chosen == pasteAction) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("item-menu action=paste id=%1").arg(id));
         activateById(id, ActivationSource::Menu);
     } else if (chosen == copyAction) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("item-menu action=copy id=%1").arg(id));
         setSelectedItemToClipboardOnly();
     } else if (chosen == pinAction) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("item-menu action=toggle-pin id=%1").arg(id));
         store_->togglePinned(id);
     } else if (chosen == deleteAction) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("item-menu action=delete id=%1").arg(id));
         store_->deleteItem(id);
     }
 }
@@ -783,6 +857,7 @@ void PopupWindow::clearHistoryWithConfirmation() {
     if (!store_) {
         return;
     }
+    RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("clear-history requested confirmBeforeClear=%1").arg(AppSettings::confirmBeforeClear() ? QStringLiteral("true") : QStringLiteral("false")));
 
     if (AppSettings::confirmBeforeClear()) {
         const QMessageBox::StandardButton result = QMessageBox::question(
@@ -793,10 +868,12 @@ void PopupWindow::clearHistoryWithConfirmation() {
             QMessageBox::No);
 
         if (result != QMessageBox::Yes) {
+            RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("clear-history cancelled"));
             return;
         }
     }
 
+    RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("clear-history confirmed"));
     store_->clearUnpinned();
 }
 
@@ -819,18 +896,21 @@ bool PopupWindow::handleKeyboardEvent(QKeyEvent *event, QObject *source) {
     const bool fromSearch = source == search_;
 
     if (event->key() == Qt::Key_Escape) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=escape-hide"));
         hide();
         event->accept();
         return true;
     }
 
     if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=activate-current"));
         activateCurrentItem();
         event->accept();
         return true;
     }
 
     if (ctrl && event->key() == Qt::Key_F) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=focus-search"));
         search_->setFocus(Qt::ShortcutFocusReason);
         search_->selectAll();
         event->accept();
@@ -838,24 +918,28 @@ bool PopupWindow::handleKeyboardEvent(QKeyEvent *event, QObject *source) {
     }
 
     if (ctrl && event->key() == Qt::Key_Comma) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=open-settings"));
         emit settingsRequested();
         event->accept();
         return true;
     }
 
     if (ctrl && event->key() == Qt::Key_C && !(fromSearch && search_->hasSelectedText())) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=copy-only"));
         setSelectedItemToClipboardOnly();
         event->accept();
         return true;
     }
 
     if (ctrl && event->key() == Qt::Key_P && list_->currentItem() && store_) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=toggle-pin id=%1").arg(list_->currentItem()->data(Qt::UserRole).toInt()));
         store_->togglePinned(list_->currentItem()->data(Qt::UserRole).toInt());
         event->accept();
         return true;
     }
 
     if (!fromSearch && ctrl && event->key() == Qt::Key_Delete) {
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=clear-history"));
         clearHistoryWithConfirmation();
         event->accept();
         return true;
@@ -863,6 +947,7 @@ bool PopupWindow::handleKeyboardEvent(QKeyEvent *event, QObject *source) {
 
     if (!fromSearch && noModifier && event->key() == Qt::Key_Delete && list_->currentItem()) {
         if (store_) {
+            RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=delete-item id=%1").arg(list_->currentItem()->data(Qt::UserRole).toInt()));
             store_->deleteItem(list_->currentItem()->data(Qt::UserRole).toInt());
         }
         event->accept();
@@ -872,6 +957,7 @@ bool PopupWindow::handleKeyboardEvent(QKeyEvent *event, QObject *source) {
     if (!fromSearch && noModifier && event->key() >= Qt::Key_1 && event->key() <= Qt::Key_9) {
         const int row = event->key() - Qt::Key_1;
         if (row >= 0 && row < list_->count()) {
+            RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=quick-select row=%1").arg(row));
             list_->setCurrentRow(row);
             list_->scrollToItem(list_->currentItem(), QAbstractItemView::EnsureVisible);
             activateCurrentItem();
@@ -912,6 +998,7 @@ bool PopupWindow::handleKeyboardEvent(QKeyEvent *event, QObject *source) {
         }
 
         if (handledNavigation) {
+            RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("keyboard action=navigate row=%1 key=%2").arg(row).arg(event->key()));
             list_->setCurrentRow(row);
             list_->scrollToItem(list_->currentItem(), QAbstractItemView::EnsureVisible);
             updateSelectionStyles();
@@ -1007,6 +1094,7 @@ void PopupWindow::finishDrag() {
         hasUserPosition_ = true;
         QSettings settings;
         settings.setValue(QStringLiteral("popup/position"), userPosition_);
+        RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("drag-finished position=%1,%2").arg(userPosition_.x()).arg(userPosition_.y()));
     }
     dragCandidate_ = false;
     dragging_ = false;
@@ -1123,5 +1211,6 @@ void PopupWindow::keyPressEvent(QKeyEvent *event) {
 
 void PopupWindow::hideEvent(QHideEvent *event) {
     finishDrag();
+    RuntimeLog::write(QStringLiteral("PopupWindow"), QStringLiteral("hidden"));
     QWidget::hideEvent(event);
 }

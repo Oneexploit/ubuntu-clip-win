@@ -3,6 +3,7 @@
 #include "AppIntegration.h"
 #include "AppSettings.h"
 #include "PasteController.h"
+#include "RuntimeLog.h"
 
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -27,6 +28,14 @@ SettingsDialog::SettingsDialog(QWidget *parent)
     : QDialog(parent),
       autostartWasEnabled_(AppIntegration::isAutostartEnabled()),
       shortcutDisplayAtLoad_(AppIntegration::configuredShortcutDisplay()) {
+    RuntimeLog::write(QStringLiteral("SettingsDialog"),
+                      QStringLiteral("constructed autostart=%1 shortcut=%2 persistentHistory=%3 historyLimit=%4 confirmBeforeClear=%5 showDiagnostics=%6")
+                          .arg(autostartWasEnabled_ ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(shortcutDisplayAtLoad_)
+                          .arg(AppSettings::persistentHistory() ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(AppSettings::historyLimit())
+                          .arg(AppSettings::confirmBeforeClear() ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(AppSettings::showStartupDiagnostics() ? QStringLiteral("true") : QStringLiteral("false")));
     setWindowTitle(QStringLiteral("Clipboard Settings"));
     setModal(true);
     resize(560, 0);
@@ -118,8 +127,18 @@ void SettingsDialog::accept() {
     }
     const QString originalShortcut = AppIntegration::normalizeShortcutDisplay(shortcutDisplayAtLoad_);
     const bool shortcutChanged = shortcutText != originalShortcut;
+    RuntimeLog::write(QStringLiteral("SettingsDialog"),
+                      QStringLiteral("accept begin autostartChanged=%1 shortcutChanged=%2 shortcut=%3 persistentHistory=%4 historyLimit=%5 confirmBeforeClear=%6 showDiagnostics=%7")
+                          .arg(autostartChanged ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(shortcutChanged ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(shortcutText)
+                          .arg(persistentHistory_->isChecked() ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(historyLimit_->value())
+                          .arg(confirmBeforeClear_->isChecked() ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(showDiagnostics_->isChecked() ? QStringLiteral("true") : QStringLiteral("false")));
 
     if (shortcutText.isEmpty()) {
+        RuntimeLog::write(QStringLiteral("SettingsDialog"), QStringLiteral("accept failed reason=empty-shortcut"));
         QMessageBox::warning(this,
                              QStringLiteral("Clipboard Settings"),
                              QStringLiteral("Please press one valid shortcut combination before saving."));
@@ -128,6 +147,7 @@ void SettingsDialog::accept() {
 
     if (shortcutChanged) {
         if (!AppIntegration::setConfiguredShortcutDisplay(shortcutText, &errorMessage)) {
+            RuntimeLog::write(QStringLiteral("SettingsDialog"), QStringLiteral("accept failed reason=set-shortcut error=%1").arg(errorMessage));
             QMessageBox::warning(this, QStringLiteral("Clipboard Settings"), errorMessage);
             return;
         }
@@ -138,7 +158,9 @@ void SettingsDialog::accept() {
             if (shortcutChanged) {
                 QString rollbackError;
                 AppIntegration::setConfiguredShortcutDisplay(originalShortcut, &rollbackError);
+                RuntimeLog::write(QStringLiteral("SettingsDialog"), QStringLiteral("accept rollback-shortcut original=%1 rollbackError=%2").arg(originalShortcut).arg(rollbackError));
             }
+            RuntimeLog::write(QStringLiteral("SettingsDialog"), QStringLiteral("accept failed reason=set-autostart error=%1").arg(errorMessage));
             QMessageBox::warning(this, QStringLiteral("Clipboard Settings"), errorMessage);
             return;
         }
@@ -149,6 +171,12 @@ void SettingsDialog::accept() {
     AppSettings::setConfirmBeforeClear(confirmBeforeClear_->isChecked());
     AppSettings::setShowStartupDiagnostics(showDiagnostics_->isChecked());
 
+    RuntimeLog::write(QStringLiteral("SettingsDialog"), QStringLiteral("accept success"));
     emit settingsApplied();
     QDialog::accept();
+}
+
+void SettingsDialog::reject() {
+    RuntimeLog::write(QStringLiteral("SettingsDialog"), QStringLiteral("rejected"));
+    QDialog::reject();
 }

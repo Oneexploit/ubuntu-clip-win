@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 #include "ClipMime.h"
+#include "RuntimeLog.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -36,6 +37,34 @@ QString nonNullString(const QString &value) {
 
 QString normalizedStoredText(QString text) {
     return ClipMime::normalizedText(nonNullString(text));
+}
+
+QString clipboardModeName(QClipboard::Mode mode) {
+    switch (mode) {
+    case QClipboard::Clipboard:
+        return QStringLiteral("Clipboard");
+    case QClipboard::Selection:
+        return QStringLiteral("Selection");
+    case QClipboard::FindBuffer:
+        return QStringLiteral("FindBuffer");
+    }
+
+    return QStringLiteral("Unknown");
+}
+
+QString mimeFormatsLabel(const QMimeData *mime) {
+    if (!mime) {
+        return QStringLiteral("<null>");
+    }
+
+    const QStringList formats = mime->formats();
+    return formats.isEmpty() ? QStringLiteral("<none>") : formats.join(QStringLiteral(", "));
+}
+
+QString previewForLog(QString text, int maxChars = 180) {
+    text = ClipMime::elidedPreview(std::move(text), maxChars);
+    text.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
+    return text;
 }
 
 QString quotedIdentifier(const QString &identifier) {
@@ -147,8 +176,10 @@ ClipboardStore::~ClipboardStore() {
 }
 
 bool ClipboardStore::open() {
+    RuntimeLog::initialize();
     const QString path = databasePath();
     const QFileInfo fileInfo(path);
+    debugLogPath_ = RuntimeLog::logFilePath();
     if (!QDir(fileInfo.absolutePath()).mkpath(QStringLiteral("."))) {
         emit errorOccurred(QStringLiteral("Cannot create the clipboard data directory."));
         return false;
@@ -172,6 +203,11 @@ bool ClipboardStore::open() {
 
     applyStartupRetentionPolicy();
     enforceLimit();
+    logDebugEvent(QStringLiteral("[open] database=%1 log=%2 persistentHistory=%3 historyLimit=%4")
+                      .arg(path,
+                           debugLogPath_,
+                           AppSettings::persistentHistory() ? QStringLiteral("true") : QStringLiteral("false"))
+                      .arg(AppSettings::historyLimit()));
     return true;
 }
 
@@ -357,6 +393,14 @@ QString ClipboardStore::databasePath() const {
     return QDir(appData).filePath(QStringLiteral("clips.sqlite"));
 }
 
+QString ClipboardStore::debugLogPath() const {
+    if (!debugLogPath_.trimmed().isEmpty()) {
+        return debugLogPath_;
+    }
+
+    return RuntimeLog::logFilePath();
+}
+
 QString ClipboardStore::nowIso() const {
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
 }
@@ -367,16 +411,36 @@ QString ClipboardStore::hashFor(const ClipItem &item) const {
     return QString::fromLatin1(hash.result().toHex());
 }
 
+void ClipboardStore::logDebugEvent(const QString &message, const QString &text) const {
+    RuntimeLog::write(QStringLiteral("ClipboardStore"), message, text);
+}
+
 void ClipboardStore::scheduleCaptureFromClipboard() {
-    if (!isOpen() || suppressCapture_) {
+    if (!isOpen()) {
+        logDebugEvent(QStringLiteral("[schedule] ignored reason=store-not-open"));
+        return;
+    }
+
+    if (suppressCapture_) {
+        logDebugEvent(QStringLiteral("[schedule] ignored reason=suppress-capture pendingSerial=%1 lastHash=%2")
+                          .arg(pendingCaptureSerial_)
+                          .arg(lastCapturedHash_));
         return;
     }
 
     const quint64 serial = ++pendingCaptureSerial_;
+    logDebugEvent(QStringLiteral("[schedule] begin serial=%1 mode=%2")
+                      .arg(serial)
+                      .arg(clipboardModeName(QClipboard::Clipboard)));
     if (tryCaptureCurrentClipboard(QClipboard::Clipboard)) {
+        logDebugEvent(QStringLiteral("[schedule] immediate-success serial=%1").arg(serial));
         return;
     }
 
+    logDebugEvent(QStringLiteral("[schedule] retry-needed serial=%1 attempts=%2 delayMs=%3")
+                      .arg(serial)
+                      .arg(kClipboardReadRetryCount)
+                      .arg(kClipboardReadRetryDelayMs));
     scheduleClipboardRetry(QClipboard::Clipboard, serial, 1);
 }
 
@@ -385,6 +449,7 @@ void ClipboardStore::scheduleCaptureFromSelection() {
 }
 
 void ClipboardStore::captureFromClipboard() {
+    logDebugEvent(QStringLiteral("[manual-capture] begin mode=%1").arg(clipboardModeName(QClipboard::Clipboard)));
     captureCurrentClipboardWithRetry(QClipboard::Clipboard);
 }
 
@@ -393,74 +458,126 @@ void ClipboardStore::captureFromSelection() {
 }
 
 bool ClipboardStore::captureMimeData(const QMimeData *mime, QClipboard::Mode mode) {
-    Q_UNUSED(mode);
-
     const auto payload = ClipMime::payloadFromMimeData(mime);
     if (!payload.has_value()) {
+        logDebugEvent(QStringLiteral("[capture] skipped reason=no-payload mode=%1 hasText=%2 hasHtml=%3 formats=%4")
+                          .arg(clipboardModeName(mode))
+                          .arg(mime && mime->hasText() ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(mime && mime->hasHtml() ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(mimeFormatsLabel(mime)));
         return false;
     }
 
     ClipItem item;
     item.text = normalizedStoredText(payload->text);
     if (item.text.trimmed().isEmpty()) {
+        logDebugEvent(QStringLiteral("[capture] skipped reason=normalized-empty mode=%1 formats=%2")
+                          .arg(clipboardModeName(mode))
+                          .arg(mimeFormatsLabel(mime)),
+                      payload->text);
         return false;
     }
     item.hash = hashFor(item);
 
     if (item.hash == lastCapturedHash_) {
+        logDebugEvent(QStringLiteral("[capture] skipped reason=duplicate-hash mode=%1 hash=%2 chars=%3 preview=\"%4\"")
+                          .arg(clipboardModeName(mode))
+                          .arg(item.hash)
+                          .arg(item.text.size())
+                          .arg(previewForLog(item.text)),
+                      item.text);
         return false;
     }
 
     lastCapturedHash_ = item.hash;
     touchExistingOrInsert(item);
     enforceLimit();
+    logDebugEvent(QStringLiteral("[capture] stored mode=%1 hash=%2 chars=%3 preview=\"%4\"")
+                      .arg(clipboardModeName(mode))
+                      .arg(item.hash)
+                      .arg(item.text.size())
+                      .arg(previewForLog(item.text)),
+                  item.text);
     emit changed();
     return true;
 }
 
 bool ClipboardStore::tryCaptureCurrentClipboard(QClipboard::Mode mode) {
     if (!isOpen() || suppressCapture_) {
+        logDebugEvent(QStringLiteral("[try-capture] blocked mode=%1 isOpen=%2 suppressCapture=%3")
+                          .arg(clipboardModeName(mode))
+                          .arg(isOpen() ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(suppressCapture_ ? QStringLiteral("true") : QStringLiteral("false")));
         return false;
     }
 
     const QClipboard *clipboard = QGuiApplication::clipboard();
     if (!clipboard) {
+        logDebugEvent(QStringLiteral("[try-capture] blocked mode=%1 reason=no-clipboard").arg(clipboardModeName(mode)));
         return false;
     }
 
+    logDebugEvent(QStringLiteral("[try-capture] read mode=%1 formats=%2")
+                      .arg(clipboardModeName(mode))
+                      .arg(mimeFormatsLabel(clipboard->mimeData(mode))));
     return captureMimeData(clipboard->mimeData(mode), mode);
 }
 
 bool ClipboardStore::captureCurrentClipboardWithRetry(QClipboard::Mode mode) {
     if (tryCaptureCurrentClipboard(mode)) {
+        logDebugEvent(QStringLiteral("[retry-capture] success mode=%1 attempt=0").arg(clipboardModeName(mode)));
         return true;
     }
 
     for (int attempt = 1; attempt < kClipboardReadRetryCount; ++attempt) {
         QThread::msleep(kClipboardReadRetryDelayMs);
         if (tryCaptureCurrentClipboard(mode)) {
+            logDebugEvent(QStringLiteral("[retry-capture] success mode=%1 attempt=%2").arg(clipboardModeName(mode)).arg(attempt));
             return true;
         }
     }
 
+    logDebugEvent(QStringLiteral("[retry-capture] failed mode=%1 attempts=%2").arg(clipboardModeName(mode)).arg(kClipboardReadRetryCount));
     return false;
 }
 
 void ClipboardStore::scheduleClipboardRetry(QClipboard::Mode mode, quint64 serial, int attempt) {
     if (attempt >= kClipboardReadRetryCount) {
+        logDebugEvent(QStringLiteral("[schedule-retry] gave-up serial=%1 mode=%2 attempts=%3")
+                          .arg(serial)
+                          .arg(clipboardModeName(mode))
+                          .arg(kClipboardReadRetryCount));
         return;
     }
 
     // Keep retries off the GUI thread so rapid clipboard updates do not stall the app.
+    logDebugEvent(QStringLiteral("[schedule-retry] queued serial=%1 mode=%2 attempt=%3 delayMs=%4")
+                      .arg(serial)
+                      .arg(clipboardModeName(mode))
+                      .arg(attempt)
+                      .arg(kClipboardReadRetryDelayMs));
     QTimer::singleShot(kClipboardReadRetryDelayMs, this, [this, mode, serial, attempt]() {
         if (serial != pendingCaptureSerial_) {
+            logDebugEvent(QStringLiteral("[schedule-retry] cancelled serial=%1 mode=%2 attempt=%3 reason=newer-serial pendingSerial=%4")
+                              .arg(serial)
+                              .arg(clipboardModeName(mode))
+                              .arg(attempt)
+                              .arg(pendingCaptureSerial_));
             return;
         }
 
         if (tryCaptureCurrentClipboard(mode)) {
+            logDebugEvent(QStringLiteral("[schedule-retry] success serial=%1 mode=%2 attempt=%3")
+                              .arg(serial)
+                              .arg(clipboardModeName(mode))
+                              .arg(attempt));
             return;
         }
 
+        logDebugEvent(QStringLiteral("[schedule-retry] retry-again serial=%1 mode=%2 nextAttempt=%3")
+                          .arg(serial)
+                          .arg(clipboardModeName(mode))
+                          .arg(attempt + 1));
         scheduleClipboardRetry(mode, serial, attempt + 1);
     });
 }
@@ -472,6 +589,7 @@ void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
     exists.prepare(QStringLiteral("SELECT id FROM clips WHERE hash = :hash"));
     exists.bindValue(QStringLiteral(":hash"), item.hash);
     if (exists.exec() && exists.next()) {
+        const int existingId = exists.value(0).toInt();
         QSqlQuery update(db_);
         update.prepare(QStringLiteral(R"SQL(
             UPDATE clips
@@ -484,6 +602,16 @@ void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
         update.bindValue(QStringLiteral(":hash"), item.hash);
         if (!update.exec()) {
             emit errorOccurred(QStringLiteral("Cannot update clipboard item: %1").arg(update.lastError().text()));
+            logDebugEvent(QStringLiteral("[db] update-failed id=%1 hash=%2 error=%3")
+                              .arg(existingId)
+                              .arg(item.hash)
+                              .arg(update.lastError().text()));
+        } else {
+            logDebugEvent(QStringLiteral("[db] update-existing id=%1 hash=%2 chars=%3 preview=\"%4\"")
+                              .arg(existingId)
+                              .arg(item.hash)
+                              .arg(item.text.size())
+                              .arg(previewForLog(item.text)));
         }
         return;
     }
@@ -499,7 +627,17 @@ void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
     insert.bindValue(QStringLiteral(":hash"), item.hash);
     if (!insert.exec()) {
         emit errorOccurred(QStringLiteral("Cannot insert clipboard item: %1").arg(insert.lastError().text()));
+        logDebugEvent(QStringLiteral("[db] insert-failed hash=%1 error=%2")
+                          .arg(item.hash)
+                          .arg(insert.lastError().text()));
+        return;
     }
+
+    logDebugEvent(QStringLiteral("[db] insert-new id=%1 hash=%2 chars=%3 preview=\"%4\"")
+                      .arg(insert.lastInsertId().toInt())
+                      .arg(item.hash)
+                      .arg(item.text.size())
+                      .arg(previewForLog(item.text)));
 }
 
 void ClipboardStore::applyStartupRetentionPolicy() {
@@ -529,6 +667,17 @@ void ClipboardStore::enforceLimit() {
     query.bindValue(QStringLiteral(":limit"), AppSettings::historyLimit());
     if (!query.exec()) {
         emit errorOccurred(QStringLiteral("Cannot trim clipboard history: %1").arg(query.lastError().text()));
+        logDebugEvent(QStringLiteral("[limit] trim-failed limit=%1 error=%2")
+                          .arg(AppSettings::historyLimit())
+                          .arg(query.lastError().text()));
+        return;
+    }
+
+    const int removedRows = query.numRowsAffected();
+    if (removedRows > 0) {
+        logDebugEvent(QStringLiteral("[limit] trimmed removedRows=%1 limit=%2")
+                          .arg(removedRows)
+                          .arg(AppSettings::historyLimit()));
     }
 }
 
@@ -600,17 +749,29 @@ ClipItem ClipboardStore::readItemFromQuery(const QSqlQuery &query) const {
 
 bool ClipboardStore::copyToClipboard(const ClipItem &item) {
     if (!item.isValid() || item.text.trimmed().isEmpty()) {
+        logDebugEvent(QStringLiteral("[restore] skipped reason=invalid-item id=%1 chars=%2")
+                          .arg(item.id)
+                          .arg(item.text.size()),
+                      item.text);
         return false;
     }
 
     QClipboard *clipboard = QGuiApplication::clipboard();
     if (!clipboard) {
+        logDebugEvent(QStringLiteral("[restore] skipped reason=no-clipboard id=%1 hash=%2").arg(item.id).arg(item.hash));
         return false;
     }
 
     ++pendingCaptureSerial_;
     suppressCapture_ = true;
     lastCapturedHash_ = item.hash;
+    logDebugEvent(QStringLiteral("[restore] begin id=%1 serial=%2 hash=%3 chars=%4 preview=\"%5\"")
+                      .arg(item.id)
+                      .arg(pendingCaptureSerial_)
+                      .arg(item.hash)
+                      .arg(item.text.size())
+                      .arg(previewForLog(item.text)),
+                  item.text);
 
     clipboard->setText(item.text, QClipboard::Clipboard);
 
@@ -624,6 +785,7 @@ bool ClipboardStore::copyToClipboard(const ClipItem &item) {
 
     QTimer::singleShot(0, this, [this]() {
         suppressCapture_ = false;
+        logDebugEvent(QStringLiteral("[restore] end suppressCapture=false pendingSerial=%1").arg(pendingCaptureSerial_));
         emit changed();
     });
 

@@ -28,6 +28,8 @@ add_executable(ubuntu-clip-win
     src/AppIntegration.cpp
     src/AppSettings.h
     src/AppSettings.cpp
+    src/RuntimeLog.h
+    src/RuntimeLog.cpp
     src/ClipMime.h
     src/ClipMime.cpp
     src/main.cpp
@@ -107,6 +109,8 @@ if(BUILD_TESTING)
     add_executable(ubuntu-clip-win-test-clipboardstore
         src/AppSettings.h
         src/AppSettings.cpp
+        src/RuntimeLog.h
+        src/RuntimeLog.cpp
         src/ClipMime.h
         src/ClipMime.cpp
         src/ClipItem.h
@@ -134,6 +138,8 @@ if(BUILD_TESTING)
         src/AppIntegration.cpp
         src/AppSettings.h
         src/AppSettings.cpp
+        src/RuntimeLog.h
+        src/RuntimeLog.cpp
         src/PasteController.h
         src/PasteController.cpp
         tests/test_appintegration.cpp

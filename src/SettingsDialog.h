@@ -18,6 +18,7 @@ signals:
 
 protected:
     void accept() override;
+    void reject() override;
 
 private:
     QCheckBox *persistentHistory_ = nullptr;

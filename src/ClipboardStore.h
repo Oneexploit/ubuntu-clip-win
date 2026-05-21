@@ -44,7 +44,9 @@ private:
     bool ensureSchema();
     bool migrateLegacySchemaIfNeeded();
     QString databasePath() const;
+    QString debugLogPath() const;
     QString hashFor(const ClipItem &item) const;
+    void logDebugEvent(const QString &message, const QString &text = QString()) const;
     bool tryCaptureCurrentClipboard(QClipboard::Mode mode);
     bool captureCurrentClipboardWithRetry(QClipboard::Mode mode);
     bool captureMimeData(const QMimeData *mime, QClipboard::Mode mode);
@@ -57,6 +59,7 @@ private:
 
     QSqlDatabase db_;
     QString connectionName_;
+    QString debugLogPath_;
     QString lastCapturedHash_;
     quint64 pendingCaptureSerial_ = 0;
     bool suppressCapture_ = false;

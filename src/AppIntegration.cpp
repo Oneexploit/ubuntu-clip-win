@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 #include "PasteController.h"
+#include "RuntimeLog.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -43,6 +44,11 @@ bool runProcess(const QString &program,
                 QString *standardOutput = nullptr,
                 QString *standardError = nullptr,
                 int timeoutMs = 2000) {
+    RuntimeLog::write(QStringLiteral("AppIntegration"),
+                      QStringLiteral("run-process start program=%1 args=%2 timeoutMs=%3")
+                          .arg(program)
+                          .arg(arguments.join(QStringLiteral(" ")))
+                          .arg(timeoutMs));
     QProcess process;
     process.start(program, arguments);
     if (!process.waitForFinished(timeoutMs)) {
@@ -51,16 +57,27 @@ bool runProcess(const QString &program,
         if (standardError) {
             *standardError = QStringLiteral("The command timed out.");
         }
+        RuntimeLog::write(QStringLiteral("AppIntegration"),
+                          QStringLiteral("run-process timeout program=%1 args=%2").arg(program).arg(arguments.join(QStringLiteral(" "))));
         return false;
     }
 
+    const QString stdoutText = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
+    const QString stderrText = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
     if (standardOutput) {
-        *standardOutput = QString::fromLocal8Bit(process.readAllStandardOutput()).trimmed();
+        *standardOutput = stdoutText;
     }
     if (standardError) {
-        *standardError = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
+        *standardError = stderrText;
     }
-    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+    const bool ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+    RuntimeLog::write(QStringLiteral("AppIntegration"),
+                      QStringLiteral("run-process finished ok=%1 exitCode=%2 stdout=%3 stderr=%4")
+                          .arg(ok ? QStringLiteral("true") : QStringLiteral("false"))
+                          .arg(process.exitCode())
+                          .arg(stdoutText)
+                          .arg(stderrText));
+    return ok;
 }
 
 QString gsettingsPath() {
@@ -332,10 +349,12 @@ bool AppIntegration::isShortcutConfigAvailable() {
 QString AppIntegration::configuredShortcutDisplay() {
     const QString storedShortcut = normalizeShortcutDisplay(AppSettings::globalShortcut());
     if (!storedShortcut.isEmpty()) {
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("configured-shortcut source=settings value=%1").arg(storedShortcut));
         return storedShortcut;
     }
 
     if (!isGnomeShortcutBackendAvailable()) {
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("configured-shortcut source=default value=%1").arg(defaultShortcutDisplay()));
         return defaultShortcutDisplay();
     }
 
@@ -352,8 +371,10 @@ QString AppIntegration::configuredShortcutDisplay() {
     const QString shortcut = ok ? shortcutValueToDisplay(output) : QString();
     if (!shortcut.isEmpty()) {
         AppSettings::setGlobalShortcut(shortcut);
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("configured-shortcut source=gsettings value=%1").arg(shortcut));
         return shortcut;
     }
+    RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("configured-shortcut fallback-default value=%1").arg(defaultShortcutDisplay()));
     return defaultShortcutDisplay();
 }
 
@@ -379,12 +400,15 @@ bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut
         if (errorMessage) {
             *errorMessage = QStringLiteral("The shortcut format is invalid.");
         }
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-configured-shortcut failed reason=invalid-format input=%1").arg(displayShortcut));
         return false;
     }
 
     AppSettings::setGlobalShortcut(normalizedShortcut);
+    RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-configured-shortcut normalized=%1").arg(normalizedShortcut));
 
     if (PasteController::isX11Session()) {
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-configured-shortcut success x11-only shortcut=%1").arg(normalizedShortcut));
         return true;
     }
 
@@ -392,6 +416,7 @@ bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut
         if (errorMessage) {
             *errorMessage = QStringLiteral("Wayland global shortcuts need the GNOME extension schema to be installed and active.");
         }
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-configured-shortcut failed reason=no-wayland-backend shortcut=%1").arg(normalizedShortcut));
         return false;
     }
 
@@ -400,6 +425,7 @@ bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut
         if (errorMessage) {
             *errorMessage = QStringLiteral("The shortcut format is invalid.");
         }
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-configured-shortcut failed reason=invalid-accelerator shortcut=%1").arg(normalizedShortcut));
         return false;
     }
 
@@ -422,6 +448,9 @@ bool AppIntegration::setConfiguredShortcutDisplay(const QString &displayShortcut
     }
     if (ok) {
         refreshGnomeExtensionShortcutBinding();
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-configured-shortcut success accelerator=%1").arg(accelerator));
+    } else {
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-configured-shortcut failed accelerator=%1 error=%2").arg(accelerator).arg(stderrText));
     }
     return ok;
 }
@@ -432,12 +461,14 @@ bool AppIntegration::isAutostartEnabled() {
 
 bool AppIntegration::setAutostartEnabled(bool enabled, QString *errorMessage) {
     const QString path = autostartFilePath();
+    RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-autostart begin enabled=%1 path=%2").arg(enabled ? QStringLiteral("true") : QStringLiteral("false")).arg(path));
     if (enabled) {
         QDir dir(QFileInfo(path).absolutePath());
         if (!dir.mkpath(QStringLiteral("."))) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("The autostart directory could not be created.");
             }
+            RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-autostart failed reason=mkdir"));
             return false;
         }
 
@@ -446,6 +477,7 @@ bool AppIntegration::setAutostartEnabled(bool enabled, QString *errorMessage) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("The autostart file could not be written.");
             }
+            RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-autostart failed reason=open-write"));
             return false;
         }
 
@@ -455,8 +487,10 @@ bool AppIntegration::setAutostartEnabled(bool enabled, QString *errorMessage) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("The autostart file could not be saved.");
             }
+            RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-autostart failed reason=commit"));
             return false;
         }
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-autostart success enabled=true"));
         return true;
     }
 
@@ -464,7 +498,9 @@ bool AppIntegration::setAutostartEnabled(bool enabled, QString *errorMessage) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("The autostart file could not be removed.");
         }
+        RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-autostart failed reason=remove"));
         return false;
     }
+    RuntimeLog::write(QStringLiteral("AppIntegration"), QStringLiteral("set-autostart success enabled=false"));
     return true;
 }

@@ -2,6 +2,7 @@
 
 #include "AppIntegration.h"
 #include "PasteController.h"
+#include "RuntimeLog.h"
 
 #include <QGuiApplication>
 #include <QKeySequence>
@@ -119,9 +120,12 @@ unsigned int numLockMaskFor(Display *display) {
 } // namespace
 
 LinuxHotkeyManager::LinuxHotkeyManager(QObject *parent)
-    : QObject(parent) {}
+    : QObject(parent) {
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("constructed"));
+}
 
 LinuxHotkeyManager::~LinuxHotkeyManager() {
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("destructing"));
     unregisterShortcut();
     if (nativeFilterInstalled_ && qGuiApp) {
         qGuiApp->removeNativeEventFilter(this);
@@ -133,12 +137,14 @@ bool LinuxHotkeyManager::start(QString *errorMessage) {
     if (errorMessage) {
         *errorMessage = QStringLiteral("The built-in Linux shortcut handler is unavailable on this platform.");
     }
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("start failed reason=unsupported-platform"));
     return false;
 #else
     if (!PasteController::isX11Session()) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("The built-in Linux shortcut handler is only available on X11 sessions.");
         }
+        RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("start failed reason=not-x11"));
         return false;
     }
 
@@ -153,6 +159,7 @@ bool LinuxHotkeyManager::start(QString *errorMessage) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("The X11 display connection is not available.");
             }
+            RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("start failed reason=no-display"));
             return false;
         }
         display_ = native->display();
@@ -160,19 +167,25 @@ bool LinuxHotkeyManager::start(QString *errorMessage) {
         numLockMask_ = numLockMaskFor(nativeDisplay(display_));
     }
 
-    return registerShortcut(AppIntegration::configuredShortcutDisplay(), errorMessage);
+    const QString shortcut = AppIntegration::configuredShortcutDisplay();
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("start registering shortcut=%1").arg(shortcut));
+    return registerShortcut(shortcut, errorMessage);
 #endif
 }
 
 bool LinuxHotkeyManager::reloadShortcut(QString *errorMessage) {
 #if !defined(Q_OS_LINUX)
     Q_UNUSED(errorMessage);
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("reload-shortcut failed reason=unsupported-platform"));
     return false;
 #else
     if (!display_) {
+        RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("reload-shortcut delegates-to-start"));
         return start(errorMessage);
     }
-    return registerShortcut(AppIntegration::configuredShortcutDisplay(), errorMessage);
+    const QString shortcut = AppIntegration::configuredShortcutDisplay();
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("reload-shortcut shortcut=%1").arg(shortcut));
+    return registerShortcut(shortcut, errorMessage);
 #endif
 }
 
@@ -203,6 +216,8 @@ bool LinuxHotkeyManager::nativeEventFilter(const QByteArray &eventType, void *me
         return false;
     }
 
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"),
+                      QStringLiteral("activated keycode=%1 modifiers=%2").arg(registeredKeycode_).arg(registeredModifiers_));
     emit activated();
     return true;
 #endif
@@ -227,6 +242,8 @@ void LinuxHotkeyManager::unregisterShortcut() {
         XUngrabKey(nativeDisplay(display_), registeredKeycode_, mask, rootWindow_);
     }
     XSync(nativeDisplay(display_), False);
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"),
+                      QStringLiteral("unregister-shortcut keycode=%1 modifiers=%2").arg(registeredKeycode_).arg(registeredModifiers_));
 
     registeredKeycode_ = 0;
     registeredModifiers_ = 0;
@@ -239,16 +256,20 @@ bool LinuxHotkeyManager::registerShortcut(const QString &shortcutDisplay, QStrin
     if (errorMessage) {
         *errorMessage = QStringLiteral("The built-in Linux shortcut handler is unavailable on this platform.");
     }
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("register-shortcut failed reason=unsupported-platform"));
     return false;
 #else
     unregisterShortcut();
 
     const QString normalizedShortcut = AppIntegration::normalizeShortcutDisplay(shortcutDisplay);
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"),
+                      QStringLiteral("register-shortcut begin requested=%1 normalized=%2").arg(shortcutDisplay).arg(normalizedShortcut));
     const QKeySequence sequence = QKeySequence::fromString(normalizedShortcut, QKeySequence::PortableText);
     if (sequence.count() < 1) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("The shortcut could not be parsed.");
         }
+        RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("register-shortcut failed reason=parse"));
         return false;
     }
 
@@ -260,6 +281,7 @@ bool LinuxHotkeyManager::registerShortcut(const QString &shortcutDisplay, QStrin
         if (errorMessage) {
             *errorMessage = QStringLiteral("This shortcut key is not supported yet on X11.");
         }
+        RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("register-shortcut failed reason=unsupported-key"));
         return false;
     }
 
@@ -271,6 +293,7 @@ bool LinuxHotkeyManager::registerShortcut(const QString &shortcutDisplay, QStrin
         if (errorMessage) {
             *errorMessage = QStringLiteral("The shortcut is missing a supported modifier or key.");
         }
+        RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("register-shortcut failed reason=missing-modifier-or-key"));
         return false;
     }
 
@@ -300,8 +323,14 @@ bool LinuxHotkeyManager::registerShortcut(const QString &shortcutDisplay, QStrin
         if (errorMessage) {
             *errorMessage = QStringLiteral("This shortcut is already being used by Linux or another application.");
         }
+        RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"), QStringLiteral("register-shortcut failed reason=bad-access"));
         return false;
     }
+    RuntimeLog::write(QStringLiteral("LinuxHotkeyManager"),
+                      QStringLiteral("register-shortcut success keycode=%1 modifiers=%2 numLockMask=%3")
+                          .arg(registeredKeycode_)
+                          .arg(registeredModifiers_)
+                          .arg(numLockMask_));
     return true;
 #endif
 }
