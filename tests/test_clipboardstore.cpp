@@ -6,10 +6,42 @@
 #include <QClipboard>
 #include <QDir>
 #include <QGuiApplication>
+#include <QMimeData>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QStringList>
 #include <QUuid>
+
+#include <utility>
+
+class DelayedTextMimeData : public QMimeData {
+public:
+    DelayedTextMimeData(QString text, int attemptsBeforeReady)
+        : text_(std::move(text)),
+          attemptsBeforeReady_(attemptsBeforeReady) {}
+
+protected:
+    QStringList formats() const override {
+        return {QStringLiteral("text/plain")};
+    }
+
+    QVariant retrieveData(const QString &mimeType, QMetaType type) const override {
+        if (mimeType == QStringLiteral("text/plain") || mimeType == QStringLiteral("text/plain;charset=utf-8")) {
+            ++attemptCount_;
+            if (attemptCount_ > attemptsBeforeReady_) {
+                return text_;
+            }
+            return {};
+        }
+
+        return QMimeData::retrieveData(mimeType, type);
+    }
+
+private:
+    QString text_;
+    int attemptsBeforeReady_ = 0;
+    mutable int attemptCount_ = 0;
+};
 
 class ClipboardStoreTest : public QObject {
     Q_OBJECT
@@ -18,7 +50,9 @@ private slots:
     void initTestCase();
     void init();
     void clearUnpinnedKeepsPinnedItems();
+    void capturesDelayedClipboardPayloadsWithoutManualPause();
     void migratesLegacyRichSchemaToTextOnly();
+    void ordersNewestItemsFirstWhenTimestampsMatch();
 
 private:
     QString databasePath_;
@@ -56,6 +90,25 @@ void ClipboardStoreTest::clearUnpinnedKeepsPinnedItems() {
     items = store.recentItems();
     QCOMPARE(items.size(), 1);
     QVERIFY(items.first().pinned);
+}
+
+void ClipboardStoreTest::capturesDelayedClipboardPayloadsWithoutManualPause() {
+    ClipboardStore store;
+    QVERIFY(store.open());
+
+    auto *clipboard = QGuiApplication::clipboard();
+    QVERIFY(clipboard != nullptr);
+
+    clipboard->setMimeData(new DelayedTextMimeData(QStringLiteral("alpha"), 3));
+    store.captureFromClipboard();
+
+    clipboard->setMimeData(new DelayedTextMimeData(QStringLiteral("beta"), 3));
+    store.captureFromClipboard();
+
+    const QList<ClipItem> items = store.recentItems();
+    QCOMPARE(items.size(), 2);
+    QCOMPARE(items.first().text, QStringLiteral("beta"));
+    QCOMPARE(items.last().text, QStringLiteral("alpha"));
 }
 
 void ClipboardStoreTest::migratesLegacyRichSchemaToTextOnly() {
@@ -133,6 +186,45 @@ void ClipboardStoreTest::migratesLegacyRichSchemaToTextOnly() {
         inspectDb.close();
     }
     QSqlDatabase::removeDatabase(inspectConnectionName);
+}
+
+void ClipboardStoreTest::ordersNewestItemsFirstWhenTimestampsMatch() {
+    const QString seedConnectionName = QStringLiteral("seed-order-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    {
+        QSqlDatabase seedDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), seedConnectionName);
+        seedDb.setDatabaseName(databasePath_);
+        QVERIFY(seedDb.open());
+
+        QSqlQuery query(seedDb);
+        QVERIFY(query.exec(QStringLiteral(R"SQL(
+            CREATE TABLE clips (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT NOT NULL DEFAULT '',
+                pinned INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                hash TEXT NOT NULL UNIQUE
+            )
+        )SQL")));
+        QVERIFY(query.exec(QStringLiteral(R"SQL(
+            INSERT INTO clips(text, pinned, created_at, updated_at, hash)
+            VALUES('first', 0, '2024-01-01T00:00:00.000Z', '2024-01-03T00:00:00.000Z', 'first-hash')
+        )SQL")));
+        QVERIFY(query.exec(QStringLiteral(R"SQL(
+            INSERT INTO clips(text, pinned, created_at, updated_at, hash)
+            VALUES('second', 0, '2024-01-02T00:00:00.000Z', '2024-01-03T00:00:00.000Z', 'second-hash')
+        )SQL")));
+        seedDb.close();
+    }
+    QSqlDatabase::removeDatabase(seedConnectionName);
+
+    ClipboardStore store;
+    QVERIFY(store.open());
+
+    const QList<ClipItem> items = store.recentItems();
+    QCOMPARE(items.size(), 2);
+    QCOMPARE(items.first().text, QStringLiteral("second"));
+    QCOMPARE(items.last().text, QStringLiteral("first"));
 }
 
 QTEST_MAIN(ClipboardStoreTest)

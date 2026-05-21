@@ -19,6 +19,7 @@
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QThread>
 #include <QTimer>
 #include <QUuid>
 #include <QVariant>
@@ -27,6 +28,8 @@
 
 namespace {
 constexpr int kMaxSearchableTextChars = 256 * 1024;
+constexpr int kClipboardReadRetryCount = 16;
+constexpr int kClipboardReadRetryDelayMs = 15;
 
 QString nonNullString(const QString &value) {
     return value.isNull() ? QStringLiteral("") : value;
@@ -370,13 +373,7 @@ void ClipboardStore::scheduleCaptureFromClipboard() {
         return;
     }
 
-    captureFromClipboard();
-    QTimer::singleShot(5, this, &ClipboardStore::captureFromClipboard);
-    QTimer::singleShot(18, this, &ClipboardStore::captureFromClipboard);
-    QTimer::singleShot(45, this, &ClipboardStore::captureFromClipboard);
-    QTimer::singleShot(90, this, &ClipboardStore::captureFromClipboard);
-    QTimer::singleShot(180, this, &ClipboardStore::captureFromClipboard);
-    QTimer::singleShot(360, this, &ClipboardStore::captureFromClipboard);
+    captureCurrentClipboardWithRetry(QClipboard::Clipboard);
 }
 
 void ClipboardStore::scheduleCaptureFromSelection() {
@@ -384,16 +381,7 @@ void ClipboardStore::scheduleCaptureFromSelection() {
 }
 
 void ClipboardStore::captureFromClipboard() {
-    if (!isOpen() || suppressCapture_) {
-        return;
-    }
-
-    const QClipboard *clipboard = QGuiApplication::clipboard();
-    if (!clipboard) {
-        return;
-    }
-
-    captureMimeData(clipboard->mimeData(QClipboard::Clipboard), QClipboard::Clipboard);
+    captureCurrentClipboardWithRetry(QClipboard::Clipboard);
 }
 
 void ClipboardStore::captureFromSelection() {
@@ -424,6 +412,29 @@ bool ClipboardStore::captureMimeData(const QMimeData *mime, QClipboard::Mode mod
     enforceLimit();
     emit changed();
     return true;
+}
+
+bool ClipboardStore::captureCurrentClipboardWithRetry(QClipboard::Mode mode) {
+    if (!isOpen() || suppressCapture_) {
+        return false;
+    }
+
+    const QClipboard *clipboard = QGuiApplication::clipboard();
+    if (!clipboard) {
+        return false;
+    }
+
+    for (int attempt = 0; attempt < kClipboardReadRetryCount; ++attempt) {
+        if (captureMimeData(clipboard->mimeData(mode), mode)) {
+            return true;
+        }
+
+        if (attempt + 1 < kClipboardReadRetryCount) {
+            QThread::msleep(kClipboardReadRetryDelayMs);
+        }
+    }
+
+    return false;
 }
 
 void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
@@ -483,7 +494,7 @@ void ClipboardStore::enforceLimit() {
             SELECT id
             FROM clips
             WHERE pinned = 0
-            ORDER BY updated_at DESC
+            ORDER BY updated_at DESC, id DESC
             LIMIT :limit
         )
     )SQL"));
@@ -506,7 +517,7 @@ QList<ClipItem> ClipboardStore::recentItems(const QString &search, int limit) co
             SELECT id, text, pinned, created_at, updated_at, hash
             FROM clips
             WHERE text LIKE :search
-            ORDER BY pinned DESC, updated_at DESC
+            ORDER BY pinned DESC, updated_at DESC, id DESC
             LIMIT :limit
         )SQL"));
         query.bindValue(QStringLiteral(":search"), QStringLiteral("%") + search.trimmed() + QStringLiteral("%"));
@@ -514,7 +525,7 @@ QList<ClipItem> ClipboardStore::recentItems(const QString &search, int limit) co
         query.prepare(QStringLiteral(R"SQL(
             SELECT id, text, pinned, created_at, updated_at, hash
             FROM clips
-            ORDER BY pinned DESC, updated_at DESC
+            ORDER BY pinned DESC, updated_at DESC, id DESC
             LIMIT :limit
         )SQL"));
     }

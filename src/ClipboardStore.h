@@ -45,6 +45,7 @@ private:
     bool migrateLegacySchemaIfNeeded();
     QString databasePath() const;
     QString hashFor(const ClipItem &item) const;
+    bool captureCurrentClipboardWithRetry(QClipboard::Mode mode);
     bool captureMimeData(const QMimeData *mime, QClipboard::Mode mode);
     void enforceLimit();
     ClipItem readItemFromQuery(const QSqlQuery &query) const;
