@@ -93,11 +93,13 @@ sudo apt install -y \
   qt6-base-dev \
   libqt6sql6-sqlite \
   qt6-qpa-plugins \
+  wl-clipboard \
   xdotool \
   libglib2.0-bin \
   gnome-shell-extension-prefs
 ```
 
+`wl-clipboard` is recommended on Wayland so the app can fall back to `wl-paste` if Qt reports a clipboard change before the text payload is readable.
 `xdotool` is optional on Wayland, but it is required for one-key paste on X11.
 
 ## Run

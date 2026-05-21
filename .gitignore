@@ -1,5 +1,6 @@
 build/
 build-deb/
+build-*/
 *.deb
 *.sqlite
 *.user

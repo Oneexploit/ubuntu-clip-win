@@ -52,6 +52,8 @@ private slots:
     void init();
     void clearUnpinnedKeepsPinnedItems();
     void capturesDelayedClipboardPayloadsWithoutManualPause();
+    void fallsBackWhenMimeDataIsEmpty();
+    void duplicateTextMovesExistingItemToFront();
     void preservesFullTextWithoutTruncation();
     void schedulesClipboardRetriesAsynchronously();
     void migratesLegacyRichSchemaToTextOnly();
@@ -115,6 +117,47 @@ void ClipboardStoreTest::capturesDelayedClipboardPayloadsWithoutManualPause() {
     QCOMPARE(items.size(), 2);
     QCOMPARE(items.first().text, QStringLiteral("beta"));
     QCOMPARE(items.last().text, QStringLiteral("alpha"));
+}
+
+void ClipboardStoreTest::fallsBackWhenMimeDataIsEmpty() {
+    ClipboardStore store;
+    QVERIFY(store.open());
+
+    auto *clipboard = QGuiApplication::clipboard();
+    QVERIFY(clipboard != nullptr);
+
+    qputenv("UBUNTU_CLIP_WIN_CLIPBOARD_FALLBACK_TEXT", QByteArray("fallback text"));
+    clipboard->setMimeData(new QMimeData());
+    store.captureFromClipboard();
+    qunsetenv("UBUNTU_CLIP_WIN_CLIPBOARD_FALLBACK_TEXT");
+
+    const QList<ClipItem> items = store.recentItems();
+    QCOMPARE(items.size(), 1);
+    QCOMPARE(items.first().text, QStringLiteral("fallback text"));
+}
+
+void ClipboardStoreTest::duplicateTextMovesExistingItemToFront() {
+    ClipboardStore store;
+    QVERIFY(store.open());
+
+    auto *clipboard = QGuiApplication::clipboard();
+    QVERIFY(clipboard != nullptr);
+
+    clipboard->setText(QStringLiteral("alpha"));
+    store.captureFromClipboard();
+    QTest::qWait(20);
+
+    clipboard->setText(QStringLiteral("beta"));
+    store.captureFromClipboard();
+    QTest::qWait(20);
+
+    clipboard->setText(QStringLiteral("alpha"));
+    store.captureFromClipboard();
+
+    const QList<ClipItem> items = store.recentItems();
+    QCOMPARE(items.size(), 2);
+    QCOMPARE(items.first().text, QStringLiteral("alpha"));
+    QCOMPARE(items.last().text, QStringLiteral("beta"));
 }
 
 void ClipboardStoreTest::preservesFullTextWithoutTruncation() {

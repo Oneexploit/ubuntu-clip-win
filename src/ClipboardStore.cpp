@@ -16,6 +16,7 @@
 #include <QGuiApplication>
 #include <QHash>
 #include <QMap>
+#include <QProcess>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -65,6 +66,10 @@ QString previewForLog(QString text, int maxChars = 180) {
     text = ClipMime::elidedPreview(std::move(text), maxChars);
     text.replace(QLatin1Char('\n'), QStringLiteral("\\n"));
     return text;
+}
+
+QString captureSourceLabel(bool usedFallback) {
+    return usedFallback ? QStringLiteral("fallback") : QStringLiteral("mime");
 }
 
 QString quotedIdentifier(const QString &identifier) {
@@ -458,7 +463,13 @@ void ClipboardStore::captureFromSelection() {
 }
 
 bool ClipboardStore::captureMimeData(const QMimeData *mime, QClipboard::Mode mode) {
-    const auto payload = ClipMime::payloadFromMimeData(mime);
+    bool usedFallback = false;
+    auto payload = ClipMime::payloadFromMimeData(mime);
+    if (!payload.has_value()) {
+        payload = payloadFromClipboardFallback(mode);
+        usedFallback = payload.has_value();
+    }
+
     if (!payload.has_value()) {
         logDebugEvent(QStringLiteral("[capture] skipped reason=no-payload mode=%1 hasText=%2 hasHtml=%3 formats=%4")
                           .arg(clipboardModeName(mode))
@@ -479,9 +490,11 @@ bool ClipboardStore::captureMimeData(const QMimeData *mime, QClipboard::Mode mod
     }
     item.hash = hashFor(item);
 
-    if (item.hash == lastCapturedHash_) {
-        logDebugEvent(QStringLiteral("[capture] skipped reason=duplicate-hash mode=%1 hash=%2 chars=%3 preview=\"%4\"")
+    const bool duplicateHash = item.hash == lastCapturedHash_;
+    if (duplicateHash && usedFallback) {
+        logDebugEvent(QStringLiteral("[capture] skipped reason=fallback-duplicate-hash mode=%1 source=%2 hash=%3 chars=%4 preview=\"%5\"")
                           .arg(clipboardModeName(mode))
+                          .arg(captureSourceLabel(usedFallback))
                           .arg(item.hash)
                           .arg(item.text.size())
                           .arg(previewForLog(item.text)),
@@ -492,14 +505,95 @@ bool ClipboardStore::captureMimeData(const QMimeData *mime, QClipboard::Mode mod
     lastCapturedHash_ = item.hash;
     touchExistingOrInsert(item);
     enforceLimit();
-    logDebugEvent(QStringLiteral("[capture] stored mode=%1 hash=%2 chars=%3 preview=\"%4\"")
-                      .arg(clipboardModeName(mode))
+    const QString captureMessage = duplicateHash
+        ? QStringLiteral("[capture] promoted-existing mode=%1 source=%2 hash=%3 chars=%4 preview=\"%5\"")
+        : QStringLiteral("[capture] stored mode=%1 source=%2 hash=%3 chars=%4 preview=\"%5\"");
+    logDebugEvent(captureMessage.arg(clipboardModeName(mode))
+                      .arg(captureSourceLabel(usedFallback))
                       .arg(item.hash)
                       .arg(item.text.size())
                       .arg(previewForLog(item.text)),
                   item.text);
     emit changed();
     return true;
+}
+
+std::optional<ClipPayload> ClipboardStore::payloadFromClipboardFallback(QClipboard::Mode mode) const {
+    if (mode != QClipboard::Clipboard) {
+        return std::nullopt;
+    }
+
+    const QByteArray forcedText = qgetenv("UBUNTU_CLIP_WIN_CLIPBOARD_FALLBACK_TEXT");
+    if (!forcedText.isEmpty()) {
+        ClipPayload payload;
+        payload.text = ClipMime::normalizedText(QString::fromUtf8(forcedText));
+        if (!payload.text.trimmed().isEmpty()) {
+            logDebugEvent(QStringLiteral("[fallback] success mode=%1 source=env chars=%2 preview=\"%3\"")
+                              .arg(clipboardModeName(mode))
+                              .arg(payload.text.size())
+                              .arg(previewForLog(payload.text)),
+                          payload.text);
+            return payload;
+        }
+    }
+
+    const QString sessionType = QString::fromUtf8(qgetenv("XDG_SESSION_TYPE"));
+    const bool looksLikeWayland = sessionType.compare(QStringLiteral("wayland"), Qt::CaseInsensitive) == 0
+        || !qgetenv("WAYLAND_DISPLAY").isEmpty();
+    if (!looksLikeWayland) {
+        logDebugEvent(QStringLiteral("[fallback] skipped mode=%1 reason=not-wayland").arg(clipboardModeName(mode)));
+        return std::nullopt;
+    }
+
+    const QString wlPastePath = QStandardPaths::findExecutable(QStringLiteral("wl-paste"));
+    if (wlPastePath.isEmpty()) {
+        logDebugEvent(QStringLiteral("[fallback] unavailable mode=%1 reason=wl-paste-not-found").arg(clipboardModeName(mode)));
+        return std::nullopt;
+    }
+
+    QProcess process;
+    process.start(wlPastePath, {QStringLiteral("--no-newline"), QStringLiteral("--type"), QStringLiteral("text")}, QIODevice::ReadOnly);
+    if (!process.waitForStarted(100)) {
+        logDebugEvent(QStringLiteral("[fallback] failed mode=%1 reason=start-timeout program=%2")
+                          .arg(clipboardModeName(mode))
+                          .arg(wlPastePath));
+        return std::nullopt;
+    }
+
+    if (!process.waitForFinished(250)) {
+        process.kill();
+        process.waitForFinished(100);
+        logDebugEvent(QStringLiteral("[fallback] failed mode=%1 reason=read-timeout program=%2")
+                          .arg(clipboardModeName(mode))
+                          .arg(wlPastePath));
+        return std::nullopt;
+    }
+
+    const QByteArray stdoutData = process.readAllStandardOutput();
+    const QByteArray stderrData = process.readAllStandardError();
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        logDebugEvent(QStringLiteral("[fallback] failed mode=%1 reason=nonzero-exit exitCode=%2 stderr=\"%3\"")
+                          .arg(clipboardModeName(mode))
+                          .arg(process.exitCode())
+                          .arg(QString::fromUtf8(stderrData).trimmed()));
+        return std::nullopt;
+    }
+
+    ClipPayload payload;
+    payload.text = ClipMime::normalizedText(QString::fromUtf8(stdoutData));
+    if (payload.text.trimmed().isEmpty()) {
+        logDebugEvent(QStringLiteral("[fallback] failed mode=%1 reason=empty-output stderr=\"%2\"")
+                          .arg(clipboardModeName(mode))
+                          .arg(QString::fromUtf8(stderrData).trimmed()));
+        return std::nullopt;
+    }
+
+    logDebugEvent(QStringLiteral("[fallback] success mode=%1 source=wl-paste chars=%2 preview=\"%3\"")
+                      .arg(clipboardModeName(mode))
+                      .arg(payload.text.size())
+                      .arg(previewForLog(payload.text)),
+                  payload.text);
+    return payload;
 }
 
 bool ClipboardStore::tryCaptureCurrentClipboard(QClipboard::Mode mode) {

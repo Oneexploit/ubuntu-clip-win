@@ -10,6 +10,7 @@ sudo apt install -y \
   qt6-base-dev \
   libqt6sql6-sqlite \
   qt6-qpa-plugins \
+  wl-clipboard \
   xdotool \
   libglib2.0-bin \
   gnome-shell-extension-prefs

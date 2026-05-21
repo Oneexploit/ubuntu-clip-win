@@ -47,6 +47,7 @@ private:
     QString debugLogPath() const;
     QString hashFor(const ClipItem &item) const;
     void logDebugEvent(const QString &message, const QString &text = QString()) const;
+    std::optional<ClipPayload> payloadFromClipboardFallback(QClipboard::Mode mode) const;
     bool tryCaptureCurrentClipboard(QClipboard::Mode mode);
     bool captureCurrentClipboardWithRetry(QClipboard::Mode mode);
     bool captureMimeData(const QMimeData *mime, QClipboard::Mode mode);
