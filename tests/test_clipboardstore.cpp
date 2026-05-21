@@ -5,6 +5,7 @@
 
 #include <QClipboard>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QMimeData>
 #include <QSqlDatabase>
@@ -51,6 +52,8 @@ private slots:
     void init();
     void clearUnpinnedKeepsPinnedItems();
     void capturesDelayedClipboardPayloadsWithoutManualPause();
+    void preservesFullTextWithoutTruncation();
+    void schedulesClipboardRetriesAsynchronously();
     void migratesLegacyRichSchemaToTextOnly();
     void ordersNewestItemsFirstWhenTimestampsMatch();
 
@@ -60,6 +63,7 @@ private:
 
 void ClipboardStoreTest::initTestCase() {
     AppSettings::setPersistentHistory(true);
+    AppSettings::setHistoryLimit(5000);
 }
 
 void ClipboardStoreTest::init() {
@@ -67,6 +71,8 @@ void ClipboardStoreTest::init() {
     QVERIFY(QDir().mkpath(tempDir));
     databasePath_ = QDir(tempDir).filePath(QStringLiteral("clips.sqlite"));
     qputenv("UBUNTU_CLIP_WIN_DB_PATH", databasePath_.toUtf8());
+    AppSettings::setPersistentHistory(true);
+    AppSettings::setHistoryLimit(5000);
 }
 
 void ClipboardStoreTest::clearUnpinnedKeepsPinnedItems() {
@@ -109,6 +115,46 @@ void ClipboardStoreTest::capturesDelayedClipboardPayloadsWithoutManualPause() {
     QCOMPARE(items.size(), 2);
     QCOMPARE(items.first().text, QStringLiteral("beta"));
     QCOMPARE(items.last().text, QStringLiteral("alpha"));
+}
+
+void ClipboardStoreTest::preservesFullTextWithoutTruncation() {
+    ClipboardStore store;
+    QVERIFY(store.open());
+
+    auto *clipboard = QGuiApplication::clipboard();
+    QVERIFY(clipboard != nullptr);
+
+    const QString text = QStringLiteral("BEGIN\n")
+        + QString(320 * 1024, QLatin1Char('x'))
+        + QStringLiteral("\nEND");
+
+    clipboard->setText(text);
+    store.captureFromClipboard();
+
+    const QList<ClipItem> items = store.recentItems();
+    QCOMPARE(items.size(), 1);
+    QCOMPARE(items.first().text, text);
+
+    QVERIFY(store.copyToClipboard(items.first()));
+    QCOMPARE(clipboard->text(), text);
+}
+
+void ClipboardStoreTest::schedulesClipboardRetriesAsynchronously() {
+    ClipboardStore store;
+    QVERIFY(store.open());
+
+    auto *clipboard = QGuiApplication::clipboard();
+    QVERIFY(clipboard != nullptr);
+
+    clipboard->setMimeData(new DelayedTextMimeData(QStringLiteral("alpha"), 3));
+
+    QElapsedTimer timer;
+    timer.start();
+    store.scheduleCaptureFromClipboard();
+
+    QVERIFY2(timer.elapsed() < 20, "scheduleCaptureFromClipboard should not block the UI thread");
+    QTRY_COMPARE_WITH_TIMEOUT(store.recentItems().size(), 1, 300);
+    QCOMPARE(store.recentItems().first().text, QStringLiteral("alpha"));
 }
 
 void ClipboardStoreTest::migratesLegacyRichSchemaToTextOnly() {

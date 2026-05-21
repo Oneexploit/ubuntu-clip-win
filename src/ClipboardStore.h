@@ -45,8 +45,10 @@ private:
     bool migrateLegacySchemaIfNeeded();
     QString databasePath() const;
     QString hashFor(const ClipItem &item) const;
+    bool tryCaptureCurrentClipboard(QClipboard::Mode mode);
     bool captureCurrentClipboardWithRetry(QClipboard::Mode mode);
     bool captureMimeData(const QMimeData *mime, QClipboard::Mode mode);
+    void scheduleClipboardRetry(QClipboard::Mode mode, quint64 serial, int attempt);
     void enforceLimit();
     ClipItem readItemFromQuery(const QSqlQuery &query) const;
     QString nowIso() const;
@@ -56,5 +58,6 @@ private:
     QSqlDatabase db_;
     QString connectionName_;
     QString lastCapturedHash_;
+    quint64 pendingCaptureSerial_ = 0;
     bool suppressCapture_ = false;
 };

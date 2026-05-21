@@ -27,7 +27,6 @@
 #include <utility>
 
 namespace {
-constexpr int kMaxSearchableTextChars = 256 * 1024;
 constexpr int kClipboardReadRetryCount = 16;
 constexpr int kClipboardReadRetryDelayMs = 15;
 
@@ -36,7 +35,7 @@ QString nonNullString(const QString &value) {
 }
 
 QString normalizedStoredText(QString text) {
-    return ClipMime::normalizedText(nonNullString(text)).left(kMaxSearchableTextChars);
+    return ClipMime::normalizedText(nonNullString(text));
 }
 
 QString quotedIdentifier(const QString &identifier) {
@@ -373,7 +372,12 @@ void ClipboardStore::scheduleCaptureFromClipboard() {
         return;
     }
 
-    captureCurrentClipboardWithRetry(QClipboard::Clipboard);
+    const quint64 serial = ++pendingCaptureSerial_;
+    if (tryCaptureCurrentClipboard(QClipboard::Clipboard)) {
+        return;
+    }
+
+    scheduleClipboardRetry(QClipboard::Clipboard, serial, 1);
 }
 
 void ClipboardStore::scheduleCaptureFromSelection() {
@@ -414,7 +418,7 @@ bool ClipboardStore::captureMimeData(const QMimeData *mime, QClipboard::Mode mod
     return true;
 }
 
-bool ClipboardStore::captureCurrentClipboardWithRetry(QClipboard::Mode mode) {
+bool ClipboardStore::tryCaptureCurrentClipboard(QClipboard::Mode mode) {
     if (!isOpen() || suppressCapture_) {
         return false;
     }
@@ -424,17 +428,41 @@ bool ClipboardStore::captureCurrentClipboardWithRetry(QClipboard::Mode mode) {
         return false;
     }
 
-    for (int attempt = 0; attempt < kClipboardReadRetryCount; ++attempt) {
-        if (captureMimeData(clipboard->mimeData(mode), mode)) {
-            return true;
-        }
+    return captureMimeData(clipboard->mimeData(mode), mode);
+}
 
-        if (attempt + 1 < kClipboardReadRetryCount) {
-            QThread::msleep(kClipboardReadRetryDelayMs);
+bool ClipboardStore::captureCurrentClipboardWithRetry(QClipboard::Mode mode) {
+    if (tryCaptureCurrentClipboard(mode)) {
+        return true;
+    }
+
+    for (int attempt = 1; attempt < kClipboardReadRetryCount; ++attempt) {
+        QThread::msleep(kClipboardReadRetryDelayMs);
+        if (tryCaptureCurrentClipboard(mode)) {
+            return true;
         }
     }
 
     return false;
+}
+
+void ClipboardStore::scheduleClipboardRetry(QClipboard::Mode mode, quint64 serial, int attempt) {
+    if (attempt >= kClipboardReadRetryCount) {
+        return;
+    }
+
+    // Keep retries off the GUI thread so rapid clipboard updates do not stall the app.
+    QTimer::singleShot(kClipboardReadRetryDelayMs, this, [this, mode, serial, attempt]() {
+        if (serial != pendingCaptureSerial_) {
+            return;
+        }
+
+        if (tryCaptureCurrentClipboard(mode)) {
+            return;
+        }
+
+        scheduleClipboardRetry(mode, serial, attempt + 1);
+    });
 }
 
 void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
@@ -580,6 +608,7 @@ bool ClipboardStore::copyToClipboard(const ClipItem &item) {
         return false;
     }
 
+    ++pendingCaptureSerial_;
     suppressCapture_ = true;
     lastCapturedHash_ = item.hash;
 
@@ -593,7 +622,7 @@ bool ClipboardStore::copyToClipboard(const ClipItem &item) {
     update.bindValue(QStringLiteral(":id"), item.id);
     update.exec();
 
-    QTimer::singleShot(50, this, [this]() {
+    QTimer::singleShot(0, this, [this]() {
         suppressCapture_ = false;
         emit changed();
     });
