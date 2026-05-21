@@ -88,6 +88,10 @@ QString gnomeExtensionsPath() {
     return QStandardPaths::findExecutable(QStringLiteral("gnome-extensions"));
 }
 
+QString wlPastePath() {
+    return QStandardPaths::findExecutable(QStringLiteral("wl-paste"));
+}
+
 QString defaultShortcutDisplay() {
     return QStringLiteral("Ctrl+Alt+V");
 }
@@ -330,6 +334,9 @@ QStringList AppIntegration::diagnosticsMessages() {
     QStringList messages;
     if (PasteController::isWaylandSession()) {
         messages << QStringLiteral("Wayland is active. Clipboard items are restored to the clipboard, then you paste them with Ctrl+V in the target app.");
+        if (wlPastePath().isEmpty()) {
+            messages << QStringLiteral("wl-clipboard is not installed. Install it to enable the wl-paste fallback for rapid clipboard capture on Wayland.");
+        }
     } else if (PasteController::isX11Session() && !PasteController::canAutoPaste()) {
         messages << QStringLiteral("X11 is active but xdotool was not found. Install xdotool to enable one-key paste.");
     }
