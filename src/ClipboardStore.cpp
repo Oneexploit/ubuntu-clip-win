@@ -596,6 +596,47 @@ std::optional<ClipPayload> ClipboardStore::payloadFromClipboardFallback(QClipboa
     return payload;
 }
 
+void ClipboardStore::seedLastCapturedHashFromCurrentClipboard() {
+    const QClipboard *clipboard = QGuiApplication::clipboard();
+    if (!clipboard) {
+        lastCapturedHash_.clear();
+        logDebugEvent(QStringLiteral("[state] seed-last-hash skipped reason=no-clipboard"));
+        return;
+    }
+
+    auto payload = ClipMime::payloadFromMimeData(clipboard->mimeData(QClipboard::Clipboard));
+    bool usedFallback = false;
+    if (!payload.has_value()) {
+        payload = payloadFromClipboardFallback(QClipboard::Clipboard);
+        usedFallback = payload.has_value();
+    }
+
+    if (!payload.has_value()) {
+        lastCapturedHash_.clear();
+        logDebugEvent(QStringLiteral("[state] seed-last-hash cleared reason=no-payload"));
+        return;
+    }
+
+    ClipItem item;
+    item.text = normalizedStoredText(payload->text);
+    if (item.text.trimmed().isEmpty()) {
+        lastCapturedHash_.clear();
+        logDebugEvent(QStringLiteral("[state] seed-last-hash cleared reason=normalized-empty source=%1")
+                          .arg(captureSourceLabel(usedFallback)),
+                      payload->text);
+        return;
+    }
+
+    item.hash = hashFor(item);
+    lastCapturedHash_ = item.hash;
+    logDebugEvent(QStringLiteral("[state] seed-last-hash source=%1 hash=%2 chars=%3 preview=\"%4\"")
+                      .arg(captureSourceLabel(usedFallback))
+                      .arg(item.hash)
+                      .arg(item.text.size())
+                      .arg(previewForLog(item.text)),
+                  item.text);
+}
+
 bool ClipboardStore::tryCaptureCurrentClipboard(QClipboard::Mode mode) {
     if (!isOpen() || suppressCapture_) {
         logDebugEvent(QStringLiteral("[try-capture] blocked mode=%1 isOpen=%2 suppressCapture=%3")
@@ -929,7 +970,7 @@ void ClipboardStore::clearUnpinned() {
 
     QSqlQuery query(db_);
     if (query.exec(QStringLiteral("DELETE FROM clips WHERE pinned = 0"))) {
-        lastCapturedHash_.clear();
+        seedLastCapturedHashFromCurrentClipboard();
         emit changed();
     } else {
         emit errorOccurred(QStringLiteral("Cannot clear clipboard history: %1").arg(query.lastError().text()));

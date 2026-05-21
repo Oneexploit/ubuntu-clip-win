@@ -51,6 +51,7 @@ private slots:
     void initTestCase();
     void init();
     void clearUnpinnedKeepsPinnedItems();
+    void clearUnpinnedDoesNotReinsertCurrentClipboardFallback();
     void capturesDelayedClipboardPayloadsWithoutManualPause();
     void fallsBackWhenMimeDataIsEmpty();
     void duplicateTextMovesExistingItemToFront();
@@ -117,6 +118,28 @@ void ClipboardStoreTest::capturesDelayedClipboardPayloadsWithoutManualPause() {
     QCOMPARE(items.size(), 2);
     QCOMPARE(items.first().text, QStringLiteral("beta"));
     QCOMPARE(items.last().text, QStringLiteral("alpha"));
+}
+
+void ClipboardStoreTest::clearUnpinnedDoesNotReinsertCurrentClipboardFallback() {
+    ClipboardStore store;
+    QVERIFY(store.open());
+
+    auto *clipboard = QGuiApplication::clipboard();
+    QVERIFY(clipboard != nullptr);
+
+    qputenv("UBUNTU_CLIP_WIN_CLIPBOARD_FALLBACK_TEXT", QByteArray("sticky fallback text"));
+    clipboard->setMimeData(new QMimeData());
+    store.captureFromClipboard();
+
+    QCOMPARE(store.recentItems().size(), 1);
+
+    store.clearUnpinned();
+    QCOMPARE(store.recentItems().size(), 0);
+
+    clipboard->setMimeData(new QMimeData());
+    store.captureFromClipboard();
+    QCOMPARE(store.recentItems().size(), 0);
+    qunsetenv("UBUNTU_CLIP_WIN_CLIPBOARD_FALLBACK_TEXT");
 }
 
 void ClipboardStoreTest::fallsBackWhenMimeDataIsEmpty() {
