@@ -4,15 +4,17 @@
 #include "ClipMime.h"
 
 #include <QApplication>
-#include <QByteArrayView>
+#include <QBuffer>
 #include <QClipboard>
 #include <QCryptographicHash>
+#include <QDataStream>
 #include <QDateTime>
 #include <QDir>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHash>
+#include <QMap>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -20,6 +22,8 @@
 #include <QTimer>
 #include <QUuid>
 #include <QVariant>
+
+#include <utility>
 
 namespace {
 constexpr int kMaxSearchableTextChars = 256 * 1024;
@@ -32,12 +36,71 @@ QString normalizedStoredText(QString text) {
     return ClipMime::normalizedText(nonNullString(text)).left(kMaxSearchableTextChars);
 }
 
-QString textFromMimeBundle(const QByteArray &bundle) {
+QString quotedIdentifier(const QString &identifier) {
+    QString escaped = identifier;
+    escaped.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+    return QStringLiteral("\"%1\"").arg(escaped);
+}
+
+QStringList tableColumns(QSqlDatabase &db, const QString &tableName) {
+    QStringList columns;
+    QSqlQuery tableInfo(db);
+    if (!tableInfo.exec(QStringLiteral("PRAGMA table_info(%1)").arg(quotedIdentifier(tableName)))) {
+        return columns;
+    }
+
+    while (tableInfo.next()) {
+        columns << tableInfo.value(1).toString();
+    }
+    return columns;
+}
+
+bool hasColumn(const QStringList &columns, const QString &columnName) {
+    return columns.contains(columnName, Qt::CaseInsensitive);
+}
+
+bool isTextOnlySchema(const QStringList &columns) {
+    static const QStringList kExpectedColumns = {
+        QStringLiteral("id"),
+        QStringLiteral("text"),
+        QStringLiteral("pinned"),
+        QStringLiteral("created_at"),
+        QStringLiteral("updated_at"),
+        QStringLiteral("hash")
+    };
+
+    if (columns.size() != kExpectedColumns.size()) {
+        return false;
+    }
+
+    for (const QString &column : kExpectedColumns) {
+        if (!hasColumn(columns, column)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+QString selectColumnOrNull(const QStringList &columns, const QString &columnName) {
+    return hasColumn(columns, columnName) ? quotedIdentifier(columnName) : QStringLiteral("NULL");
+}
+
+QString textFromLegacyMimeBundle(const QByteArray &bundle) {
     if (bundle.isEmpty()) {
         return {};
     }
 
-    const QMap<QString, QByteArray> formats = ClipMime::deserializeMimeBundle(bundle);
+    QMap<QString, QByteArray> formats;
+    QBuffer buffer;
+    buffer.setData(bundle);
+    if (!buffer.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+
+    QDataStream stream(&buffer);
+    stream.setVersion(QDataStream::Qt_6_2);
+    stream >> formats;
+
     QString text = ClipMime::normalizedText(QString::fromUtf8(formats.value(QStringLiteral("text/plain"))));
     if (!text.trimmed().isEmpty()) {
         return text;
@@ -64,7 +127,7 @@ QString textOnlyValue(QString text, const QString &html, const QByteArray &mimeB
         return normalizedStoredText(std::move(text));
     }
 
-    return normalizedStoredText(textFromMimeBundle(mimeBundle));
+    return normalizedStoredText(textFromLegacyMimeBundle(mimeBundle));
 }
 } // namespace
 
@@ -104,9 +167,6 @@ bool ClipboardStore::open() {
     if (!ensureSchema()) {
         return false;
     }
-    if (!normalizeExistingRowsToTextOnly()) {
-        return false;
-    }
 
     applyStartupRetentionPolicy();
     enforceLimit();
@@ -126,15 +186,11 @@ bool ClipboardStore::ensureSchema() {
     const bool ok = query.exec(QStringLiteral(R"SQL(
         CREATE TABLE IF NOT EXISTS clips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind TEXT NOT NULL DEFAULT 'text',
             text TEXT NOT NULL DEFAULT '',
-            html TEXT NOT NULL DEFAULT '',
             pinned INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            hash TEXT NOT NULL UNIQUE,
-            mime_bundle BLOB NOT NULL DEFAULT X'',
-            image_png BLOB NOT NULL DEFAULT X''
+            hash TEXT NOT NULL UNIQUE
         )
     )SQL"));
 
@@ -155,22 +211,21 @@ bool ClipboardStore::migrateLegacySchemaIfNeeded() {
         return true;
     }
 
-    QSqlQuery tableInfo(db_);
-    if (!tableInfo.exec(QStringLiteral("PRAGMA table_info(clips)"))) {
-        emit errorOccurred(QStringLiteral("Cannot inspect the clipboard schema: %1").arg(tableInfo.lastError().text()));
+    const QStringList columns = tableColumns(db_, QStringLiteral("clips"));
+    if (columns.isEmpty()) {
+        emit errorOccurred(QStringLiteral("Cannot inspect the clipboard schema."));
         return false;
     }
 
-    QStringList columns;
-    while (tableInfo.next()) {
-        columns << tableInfo.value(1).toString();
-    }
-    if (columns.contains(QStringLiteral("mime_bundle")) && columns.contains(QStringLiteral("kind"))) {
+    if (isTextOnlySchema(columns)) {
         return true;
     }
 
+    const QString legacyTableName = QStringLiteral("clips_legacy_%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+
     QSqlQuery rename(db_);
-    if (!rename.exec(QStringLiteral("ALTER TABLE clips RENAME TO clips_legacy"))) {
+    if (!rename.exec(QStringLiteral("ALTER TABLE clips RENAME TO %1").arg(quotedIdentifier(legacyTableName)))) {
         emit errorOccurred(QStringLiteral("Cannot migrate the old clipboard table: %1").arg(rename.lastError().text()));
         return false;
     }
@@ -179,54 +234,114 @@ bool ClipboardStore::migrateLegacySchemaIfNeeded() {
     if (!create.exec(QStringLiteral(R"SQL(
         CREATE TABLE clips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind TEXT NOT NULL DEFAULT 'text',
             text TEXT NOT NULL DEFAULT '',
-            html TEXT NOT NULL DEFAULT '',
             pinned INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
-            hash TEXT NOT NULL UNIQUE,
-            mime_bundle BLOB NOT NULL DEFAULT X'',
-            image_png BLOB NOT NULL DEFAULT X''
+            hash TEXT NOT NULL UNIQUE
         )
     )SQL"))) {
         emit errorOccurred(QStringLiteral("Cannot create the upgraded clipboard table: %1").arg(create.lastError().text()));
         return false;
     }
 
+    const QString orderBy = hasColumn(columns, QStringLiteral("id"))
+        ? quotedIdentifier(QStringLiteral("id")) + QStringLiteral(" ASC")
+        : QStringLiteral("rowid ASC");
     QSqlQuery readLegacy(db_);
-    if (!readLegacy.exec(QStringLiteral("SELECT text, pinned, created_at, updated_at FROM clips_legacy ORDER BY id ASC"))) {
+    const QString readSql = QStringLiteral(R"SQL(
+        SELECT %1 AS text,
+               %2 AS pinned,
+               %3 AS created_at,
+               %4 AS updated_at,
+               %5 AS html,
+               %6 AS mime_bundle
+        FROM %7
+        ORDER BY %8
+    )SQL")
+        .arg(selectColumnOrNull(columns, QStringLiteral("text")),
+             selectColumnOrNull(columns, QStringLiteral("pinned")),
+             selectColumnOrNull(columns, QStringLiteral("created_at")),
+             selectColumnOrNull(columns, QStringLiteral("updated_at")),
+             selectColumnOrNull(columns, QStringLiteral("html")),
+             selectColumnOrNull(columns, QStringLiteral("mime_bundle")),
+             quotedIdentifier(legacyTableName),
+             orderBy);
+
+    if (!readLegacy.exec(readSql)) {
         emit errorOccurred(QStringLiteral("Cannot read legacy clipboard items: %1").arg(readLegacy.lastError().text()));
         return false;
     }
 
+    QList<ClipItem> migratedItems;
+    QHash<QString, int> indexByHash;
     while (readLegacy.next()) {
         ClipItem item;
-        item.kind = QStringLiteral("text");
-        item.text = readLegacy.value(0).toString();
+        item.text = textOnlyValue(readLegacy.value(0).toString(),
+                                  nonNullString(readLegacy.value(4).toString()),
+                                  readLegacy.value(5).toByteArray());
+        if (item.text.trimmed().isEmpty()) {
+            continue;
+        }
+
         item.pinned = readLegacy.value(1).toInt() != 0;
         item.createdAt = QDateTime::fromString(readLegacy.value(2).toString(), Qt::ISODateWithMs);
         item.updatedAt = QDateTime::fromString(readLegacy.value(3).toString(), Qt::ISODateWithMs);
         item.hash = hashFor(item);
 
-        QSqlQuery insert(db_);
-        insert.prepare(QStringLiteral(R"SQL(
-            INSERT INTO clips(kind, text, pinned, created_at, updated_at, hash)
-            VALUES(:kind, :text, :pinned, :created_at, :updated_at, :hash)
-        )SQL"));
-        insert.bindValue(QStringLiteral(":kind"), item.kind);
+        const auto existingIt = indexByHash.constFind(item.hash);
+        if (existingIt != indexByHash.cend()) {
+            ClipItem &existing = migratedItems[existingIt.value()];
+            existing.pinned = existing.pinned || item.pinned;
+            if (item.createdAt.isValid() && (!existing.createdAt.isValid() || item.createdAt < existing.createdAt)) {
+                existing.createdAt = item.createdAt;
+            }
+            if (item.updatedAt.isValid() && (!existing.updatedAt.isValid() || item.updatedAt > existing.updatedAt)) {
+                existing.updatedAt = item.updatedAt;
+            }
+            continue;
+        }
+
+        indexByHash.insert(item.hash, migratedItems.size());
+        migratedItems << item;
+    }
+
+    if (!db_.transaction()) {
+        emit errorOccurred(QStringLiteral("Cannot start clipboard cleanup transaction: %1").arg(db_.lastError().text()));
+        return false;
+    }
+
+    QSqlQuery insert(db_);
+    insert.prepare(QStringLiteral(R"SQL(
+        INSERT INTO clips(text, pinned, created_at, updated_at, hash)
+        VALUES(:text, :pinned, :created_at, :updated_at, :hash)
+    )SQL"));
+
+    for (const ClipItem &item : migratedItems) {
         insert.bindValue(QStringLiteral(":text"), item.text);
         insert.bindValue(QStringLiteral(":pinned"), item.pinned ? 1 : 0);
         insert.bindValue(QStringLiteral(":created_at"), item.createdAt.isValid() ? item.createdAt.toString(Qt::ISODateWithMs) : nowIso());
         insert.bindValue(QStringLiteral(":updated_at"), item.updatedAt.isValid() ? item.updatedAt.toString(Qt::ISODateWithMs) : nowIso());
         insert.bindValue(QStringLiteral(":hash"), item.hash);
         if (!insert.exec()) {
+            db_.rollback();
             emit errorOccurred(QStringLiteral("Cannot migrate a clipboard item: %1").arg(insert.lastError().text()));
+            return false;
         }
     }
 
+    if (!db_.commit()) {
+        db_.rollback();
+        emit errorOccurred(QStringLiteral("Cannot finish clipboard cleanup: %1").arg(db_.lastError().text()));
+        return false;
+    }
+
     QSqlQuery drop(db_);
-    drop.exec(QStringLiteral("DROP TABLE IF EXISTS clips_legacy"));
+    if (!drop.exec(QStringLiteral("DROP TABLE IF EXISTS %1").arg(quotedIdentifier(legacyTableName)))) {
+        emit errorOccurred(QStringLiteral("Cannot remove the legacy clipboard table: %1").arg(drop.lastError().text()));
+    }
+
+    lastCapturedHash_.clear();
     return true;
 }
 
@@ -246,8 +361,6 @@ QString ClipboardStore::nowIso() const {
 
 QString ClipboardStore::hashFor(const ClipItem &item) const {
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    hash.addData(nonNullString(item.kind).toUtf8());
-    hash.addData(QByteArrayView("\0", 1));
     hash.addData(nonNullString(item.text).toUtf8());
     return QString::fromLatin1(hash.result().toHex());
 }
@@ -296,7 +409,6 @@ bool ClipboardStore::captureMimeData(const QMimeData *mime, QClipboard::Mode mod
     }
 
     ClipItem item;
-    item.kind = QStringLiteral("text");
     item.text = normalizedStoredText(payload->text);
     if (item.text.trimmed().isEmpty()) {
         return false;
@@ -324,12 +436,10 @@ void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
         QSqlQuery update(db_);
         update.prepare(QStringLiteral(R"SQL(
             UPDATE clips
-            SET kind = :kind,
-                text = :text,
+            SET text = :text,
                 updated_at = :updated_at
             WHERE hash = :hash
         )SQL"));
-        update.bindValue(QStringLiteral(":kind"), item.kind);
         update.bindValue(QStringLiteral(":text"), item.text);
         update.bindValue(QStringLiteral(":updated_at"), now);
         update.bindValue(QStringLiteral(":hash"), item.hash);
@@ -341,10 +451,9 @@ void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
 
     QSqlQuery insert(db_);
     insert.prepare(QStringLiteral(R"SQL(
-        INSERT INTO clips(kind, text, pinned, created_at, updated_at, hash)
-        VALUES(:kind, :text, 0, :created_at, :updated_at, :hash)
+        INSERT INTO clips(text, pinned, created_at, updated_at, hash)
+        VALUES(:text, 0, :created_at, :updated_at, :hash)
     )SQL"));
-    insert.bindValue(QStringLiteral(":kind"), item.kind);
     insert.bindValue(QStringLiteral(":text"), item.text);
     insert.bindValue(QStringLiteral(":created_at"), now);
     insert.bindValue(QStringLiteral(":updated_at"), now);
@@ -352,115 +461,6 @@ void ClipboardStore::touchExistingOrInsert(const ClipItem &item) {
     if (!insert.exec()) {
         emit errorOccurred(QStringLiteral("Cannot insert clipboard item: %1").arg(insert.lastError().text()));
     }
-}
-
-bool ClipboardStore::normalizeExistingRowsToTextOnly() {
-    QSqlQuery needsRewrite(db_);
-    if (!needsRewrite.exec(QStringLiteral(R"SQL(
-        SELECT COUNT(*)
-        FROM clips
-        WHERE kind IS NULL
-           OR lower(kind) <> 'text'
-           OR text IS NULL
-           OR html IS NULL
-           OR COALESCE(html, '') <> ''
-           OR mime_bundle IS NULL
-           OR length(mime_bundle) > 0
-           OR image_png IS NULL
-           OR length(image_png) > 0
-    )SQL"))) {
-        emit errorOccurred(QStringLiteral("Cannot inspect clipboard items: %1").arg(needsRewrite.lastError().text()));
-        return false;
-    }
-
-    if (!needsRewrite.next() || needsRewrite.value(0).toInt() == 0) {
-        return true;
-    }
-
-    QSqlQuery read(db_);
-    if (!read.exec(QStringLiteral(R"SQL(
-        SELECT id, kind, text, html, pinned, created_at, updated_at, hash, mime_bundle, image_png
-        FROM clips
-        ORDER BY updated_at ASC, id ASC
-    )SQL"))) {
-        emit errorOccurred(QStringLiteral("Cannot normalize clipboard history: %1").arg(read.lastError().text()));
-        return false;
-    }
-
-    QList<ClipItem> normalizedItems;
-    QHash<QString, int> indexByHash;
-    while (read.next()) {
-        ClipItem item;
-        item.text = textOnlyValue(read.value(2).toString(),
-                                  nonNullString(read.value(3).toString()),
-                                  read.value(8).toByteArray());
-        if (item.text.trimmed().isEmpty()) {
-            continue;
-        }
-
-        item.kind = QStringLiteral("text");
-        item.pinned = read.value(4).toInt() != 0;
-        item.createdAt = QDateTime::fromString(read.value(5).toString(), Qt::ISODateWithMs);
-        item.updatedAt = QDateTime::fromString(read.value(6).toString(), Qt::ISODateWithMs);
-        item.hash = hashFor(item);
-
-        const auto existingIt = indexByHash.constFind(item.hash);
-        if (existingIt != indexByHash.cend()) {
-            ClipItem &existing = normalizedItems[existingIt.value()];
-            existing.pinned = existing.pinned || item.pinned;
-            if (item.createdAt.isValid() && (!existing.createdAt.isValid() || item.createdAt < existing.createdAt)) {
-                existing.createdAt = item.createdAt;
-            }
-            if (item.updatedAt.isValid() && (!existing.updatedAt.isValid() || item.updatedAt > existing.updatedAt)) {
-                existing.updatedAt = item.updatedAt;
-            }
-            continue;
-        }
-
-        indexByHash.insert(item.hash, normalizedItems.size());
-        normalizedItems << item;
-    }
-
-    if (!db_.transaction()) {
-        emit errorOccurred(QStringLiteral("Cannot start clipboard cleanup transaction: %1").arg(db_.lastError().text()));
-        return false;
-    }
-
-    QSqlQuery clear(db_);
-    if (!clear.exec(QStringLiteral("DELETE FROM clips"))) {
-        db_.rollback();
-        emit errorOccurred(QStringLiteral("Cannot rewrite clipboard history: %1").arg(clear.lastError().text()));
-        return false;
-    }
-
-    QSqlQuery insert(db_);
-    insert.prepare(QStringLiteral(R"SQL(
-        INSERT INTO clips(kind, text, pinned, created_at, updated_at, hash)
-        VALUES(:kind, :text, :pinned, :created_at, :updated_at, :hash)
-    )SQL"));
-
-    for (const ClipItem &item : normalizedItems) {
-        insert.bindValue(QStringLiteral(":kind"), item.kind);
-        insert.bindValue(QStringLiteral(":text"), item.text);
-        insert.bindValue(QStringLiteral(":pinned"), item.pinned ? 1 : 0);
-        insert.bindValue(QStringLiteral(":created_at"), item.createdAt.isValid() ? item.createdAt.toString(Qt::ISODateWithMs) : nowIso());
-        insert.bindValue(QStringLiteral(":updated_at"), item.updatedAt.isValid() ? item.updatedAt.toString(Qt::ISODateWithMs) : nowIso());
-        insert.bindValue(QStringLiteral(":hash"), item.hash);
-        if (!insert.exec()) {
-            db_.rollback();
-            emit errorOccurred(QStringLiteral("Cannot save normalized clipboard item: %1").arg(insert.lastError().text()));
-            return false;
-        }
-    }
-
-    if (!db_.commit()) {
-        db_.rollback();
-        emit errorOccurred(QStringLiteral("Cannot finish clipboard cleanup: %1").arg(db_.lastError().text()));
-        return false;
-    }
-
-    lastCapturedHash_.clear();
-    return true;
 }
 
 void ClipboardStore::applyStartupRetentionPolicy() {
@@ -503,7 +503,7 @@ QList<ClipItem> ClipboardStore::recentItems(const QString &search, int limit) co
     const bool hasSearch = !search.trimmed().isEmpty();
     if (hasSearch) {
         query.prepare(QStringLiteral(R"SQL(
-            SELECT id, kind, text, html, pinned, created_at, updated_at, hash, mime_bundle, image_png
+            SELECT id, text, pinned, created_at, updated_at, hash
             FROM clips
             WHERE text LIKE :search
             ORDER BY pinned DESC, updated_at DESC
@@ -512,7 +512,7 @@ QList<ClipItem> ClipboardStore::recentItems(const QString &search, int limit) co
         query.bindValue(QStringLiteral(":search"), QStringLiteral("%") + search.trimmed() + QStringLiteral("%"));
     } else {
         query.prepare(QStringLiteral(R"SQL(
-            SELECT id, kind, text, html, pinned, created_at, updated_at, hash, mime_bundle, image_png
+            SELECT id, text, pinned, created_at, updated_at, hash
             FROM clips
             ORDER BY pinned DESC, updated_at DESC
             LIMIT :limit
@@ -537,7 +537,7 @@ std::optional<ClipItem> ClipboardStore::itemById(int id) const {
 
     QSqlQuery query(db_);
     query.prepare(QStringLiteral(R"SQL(
-        SELECT id, kind, text, html, pinned, created_at, updated_at, hash, mime_bundle, image_png
+        SELECT id, text, pinned, created_at, updated_at, hash
         FROM clips
         WHERE id = :id
     )SQL"));
@@ -551,15 +551,11 @@ std::optional<ClipItem> ClipboardStore::itemById(int id) const {
 ClipItem ClipboardStore::readItemFromQuery(const QSqlQuery &query) const {
     ClipItem item;
     item.id = query.value(0).toInt();
-    item.kind = nonNullString(query.value(1).toString());
-    if (item.kind.trimmed().isEmpty()) {
-        item.kind = QStringLiteral("text");
-    }
-    item.text = normalizedStoredText(query.value(2).toString());
-    item.pinned = query.value(4).toInt() != 0;
-    item.createdAt = QDateTime::fromString(query.value(5).toString(), Qt::ISODateWithMs);
-    item.updatedAt = QDateTime::fromString(query.value(6).toString(), Qt::ISODateWithMs);
-    item.hash = query.value(7).toString();
+    item.text = normalizedStoredText(query.value(1).toString());
+    item.pinned = query.value(2).toInt() != 0;
+    item.createdAt = QDateTime::fromString(query.value(3).toString(), Qt::ISODateWithMs);
+    item.updatedAt = QDateTime::fromString(query.value(4).toString(), Qt::ISODateWithMs);
+    item.hash = query.value(5).toString();
     return item;
 }
 

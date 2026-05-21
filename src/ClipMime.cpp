@@ -1,9 +1,9 @@
 #include "ClipMime.h"
 
-#include <QBuffer>
-#include <QDataStream>
 #include <QRegularExpression>
 #include <QTextDocumentFragment>
+
+#include <utility>
 
 namespace {
 bool canStoreClipboardPayload(const QMimeData *mime) {
@@ -32,39 +32,6 @@ QString ClipMime::elidedPreview(QString value, int maxChars) {
     return value;
 }
 
-QString ClipMime::kindLabel(const QString &kind) {
-    Q_UNUSED(kind);
-    return QStringLiteral("Text");
-}
-
-QByteArray ClipMime::serializeMimeBundle(const QMap<QString, QByteArray> &formats) {
-    QByteArray blob;
-    QDataStream stream(&blob, QIODevice::WriteOnly);
-    stream.setVersion(QDataStream::Qt_6_2);
-    stream << formats;
-    return blob;
-}
-
-QMap<QString, QByteArray> ClipMime::deserializeMimeBundle(const QByteArray &bundle) {
-    if (bundle.isEmpty()) {
-        return {};
-    }
-
-    QMap<QString, QByteArray> formats;
-    QBuffer buffer;
-    buffer.setData(bundle);
-    buffer.open(QIODevice::ReadOnly);
-    QDataStream stream(&buffer);
-    stream.setVersion(QDataStream::Qt_6_2);
-    stream >> formats;
-    return formats;
-}
-
-QStringList ClipMime::urlsFromMimeBundle(const QByteArray &bundle) {
-    Q_UNUSED(bundle);
-    return {};
-}
-
 std::optional<ClipPayload> ClipMime::payloadFromMimeData(const QMimeData *mime) {
     if (!mime || !canStoreClipboardPayload(mime)) {
         return std::nullopt;
@@ -81,7 +48,6 @@ std::optional<ClipPayload> ClipMime::payloadFromMimeData(const QMimeData *mime) 
     }
 
     ClipPayload payload;
-    payload.kind = QStringLiteral("text");
     payload.text = text;
     return payload;
 }

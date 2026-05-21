@@ -21,7 +21,6 @@ void ClipMimeTest::capturesPlainTextFromRichText() {
 
     const auto payload = ClipMime::payloadFromMimeData(&mime);
     QVERIFY(payload.has_value());
-    QCOMPARE(payload->kind, QStringLiteral("text"));
     QCOMPARE(payload->text, QStringLiteral("Hello\nWorld"));
 
     std::unique_ptr<QMimeData> restored(ClipMime::mimeDataFromPayload(*payload));

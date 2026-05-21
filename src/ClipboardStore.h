@@ -43,7 +43,6 @@ signals:
 private:
     bool ensureSchema();
     bool migrateLegacySchemaIfNeeded();
-    bool normalizeExistingRowsToTextOnly();
     QString databasePath() const;
     QString hashFor(const ClipItem &item) const;
     bool captureMimeData(const QMimeData *mime, QClipboard::Mode mode);
